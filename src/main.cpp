@@ -39,6 +39,9 @@ namespace {
 motion::Orientation g_orientation;
 motion::RideMetrics g_metrics;
 motion::MountCalibration g_mount;
+motion::RideHistory g_history;
+/// Czy biezacy przejazd trafil juz do historii — patrz archiveCurrentRide().
+bool g_rideArchived = false;
 
 hal::ImuSource g_imu;
 hal::Store g_store;
@@ -58,16 +61,19 @@ ui::LiveView g_liveView;
 ui::HardwareView g_hardwareView;
 ui::HoldPrompt g_holdPrompt;
 
-/// KEY2 przelacza cyklicznie: wyniki -> diagnostyka -> sprzet -> wyniki.
-enum class ViewMode { Results, Diagnostics, Hardware };
+/// KEY2 klik: wyniki -> strony historii (po 2 przejazdy) -> wyniki.
+/// KEY2 przytrzymanie: widoki serwisowe (diagnostyka/sprzet) — potrzebne przy
+/// montazu i strojeniu, ale ukryte przed codziennym klikaniem.
+enum class ViewMode { Results, History, Diagnostics, Hardware };
 ViewMode g_view = ViewMode::Results;
+/// Biezaca strona historii, 0 = dwa najnowsze przejazdy.
+size_t g_historyPage = 0;
 
-ViewMode nextView(ViewMode current) {
-    switch (current) {
-        case ViewMode::Results: return ViewMode::Diagnostics;
-        case ViewMode::Diagnostics: return ViewMode::Hardware;
-        default: return ViewMode::Results;
-    }
+/// Liczba stron historii: tylko strony, ktore maja cokolwiek do pokazania.
+size_t historyPageCount() {
+    const size_t count = g_history.count();
+    if (count == 0) return 1;
+    return (count + 1) / 2;
 }
 
 /// Progi przycisku pochodza wprost z §22 specyfikacji.
@@ -156,6 +162,17 @@ void drawMessage(const char* title, const char* detail, uint16_t accent) {
     g_buffer.present();
 }
 
+/// Przenosi biezacy przejazd do historii — raz. Wolane przy zaniku zasilania
+/// (przejazd skonczony) i tuz przed nowa sesja (siatka bezpieczenstwa, gdyby
+/// zanik nigdy nie zostal potwierdzony, np. po restarcie na baterii).
+void archiveCurrentRide() {
+    if (g_rideArchived) return;
+    if (!g_history.push(g_metrics.currentRide())) return;  // pusty przejazd
+    g_rideArchived = true;
+    g_store.saveHistory(g_history);
+    g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived);
+}
+
 /// Zapis wynikow wedlug strategii z architektury §6.2: okresowo i tylko gdy
 /// cokolwiek sie zmienilo. `force` pomija odstep czasowy — uzywane przy akcjach
 /// uzytkownika i (docelowo) przy zaniku zasilania.
@@ -165,7 +182,7 @@ void saveResultsIfDirty(bool force) {
     const uint32_t nowMs = millis();
     if (!force && nowMs - g_lastAutosaveMs < cfg::kAutosaveIntervalMs) return;
 
-    if (g_store.saveResults(g_metrics.overall(), g_metrics.currentRide())) {
+    if (g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived)) {
         g_metrics.clearDirty();
     }
     g_lastAutosaveMs = nowMs;
@@ -211,7 +228,8 @@ void runMountCalibration() {
 /// §15 — reset obu zestawow wynikow. Nie dotyka kalibracji ani stanu alarmu.
 void runResultsReset() {
     g_metrics.resetAll();
-    const bool saved = g_store.saveResults(g_metrics.overall(), g_metrics.currentRide());
+    const bool saved =
+        g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived);
     if (saved) g_metrics.clearDirty();
 
     drawMessage("POMIARY WYZEROWANE", saved ? "" : "BLAD ZAPISU",
@@ -247,6 +265,8 @@ void restoreState(bool externalPowerAtBoot) {
     }
 
     g_alarmEnabled = state.alarmEnabled;
+    g_history = state.history;
+    g_rideArchived = state.rideArchived;
 
     if (state.mountCalibrated) {
         g_mount.restore(state.mountRotation);
@@ -254,8 +274,15 @@ void restoreState(bool externalPowerAtBoot) {
     g_orientation.setMount(g_mount);
 
     if (externalPowerAtBoot) {
-        g_metrics.restore(state.overall, motion::RideValues{});
+        // Nowa sesja. Jesli poprzedni przejazd nie zdazyl trafic do historii
+        // (urzadzenie padlo w trakcie), ratujemy go teraz — przed wyzerowaniem.
+        g_metrics.restore(state.overall, state.ride);
+        archiveCurrentRide();
+        g_metrics.startNewRide();
+        g_metrics.clearDirty();
+        g_rideArchived = false;
     } else {
+        // Restart na baterii: przejazd trwa dalej (§25).
         g_metrics.restore(state.overall, state.ride);
     }
 }
@@ -340,6 +367,40 @@ void refreshDisplay() {
     // od razu po puszczeniu.
     if (g_button.isPressed() && g_button.heldMs() >= cfg::kHoldPromptDelayMs) {
         g_holdPrompt.draw(g_buffer, g_button);
+        return;
+    }
+
+    if (g_view == ViewMode::History) {
+        // Strona historii: dwa przejazdy na stronie, 1 = najnowszy.
+        static char pageLabel[8];
+        static char leftNo[4];
+        static char rightNo[4];
+
+        const size_t pages = historyPageCount();
+        if (g_historyPage >= pages) g_historyPage = 0;
+        const size_t leftIndex = g_historyPage * 2;
+        const size_t rightIndex = leftIndex + 1;
+
+        std::snprintf(pageLabel, sizeof(pageLabel), "%u/%u",
+                      static_cast<unsigned>(g_historyPage + 1), static_cast<unsigned>(pages));
+        std::snprintf(leftNo, sizeof(leftNo), "%u", static_cast<unsigned>(leftIndex + 1));
+        std::snprintf(rightNo, sizeof(rightNo), "%u", static_cast<unsigned>(rightIndex + 1));
+
+        ui::MainScreenModel model;
+        model.overall = g_history.at(leftIndex);
+        model.ride = g_history.at(rightIndex);
+        model.leftHeader = leftNo;
+        model.rightHeader = rightNo;
+        model.leftPresent = leftIndex < g_history.count();
+        model.rightPresent = rightIndex < g_history.count();
+        model.stateLabel = pageLabel;
+        model.stateColor = ui::color::kPrimary;
+        model.alarmEnabled = g_alarmEnabled;
+        model.externalPower = g_power.isExternal();
+        model.batteryPercent = M5.Power.getBatteryLevel();
+        // TODO(GPS): wspolna flaga z ekranem glownym.
+        model.speedAvailable = false;
+        g_mainScreen.draw(g_buffer, model);
         return;
     }
 
@@ -499,12 +560,39 @@ void handleButtons() {
         g_swallowClick = true;
     }
 
-    // KEY2 przelacza kolejne widoki.
+    // KEY2 przytrzymanie: wejscie/wyjscie z widokow serwisowych.
+    if (M5.BtnB.wasHold()) {
+        if (g_swallowClick) {
+            g_swallowClick = false;
+        } else {
+            g_view = (g_view == ViewMode::Diagnostics || g_view == ViewMode::Hardware)
+                         ? ViewMode::Results
+                         : ViewMode::Diagnostics;
+            g_lastDisplayMs = 0;
+        }
+    }
+
+    // KEY2 klik: kartkowanie historii; w trybie serwisowym — zmiana widoku.
     if (M5.BtnB.wasClicked()) {
         if (g_swallowClick) {
             g_swallowClick = false;
         } else {
-            g_view = nextView(g_view);
+            switch (g_view) {
+                case ViewMode::Results:
+                    g_view = ViewMode::History;
+                    g_historyPage = 0;
+                    break;
+                case ViewMode::History:
+                    ++g_historyPage;
+                    if (g_historyPage >= historyPageCount()) g_view = ViewMode::Results;
+                    break;
+                case ViewMode::Diagnostics:
+                    g_view = ViewMode::Hardware;
+                    break;
+                case ViewMode::Hardware:
+                    g_view = ViewMode::Diagnostics;
+                    break;
+            }
             g_lastDisplayMs = 0;
         }
     }
@@ -603,9 +691,13 @@ void handleStateEvent(state::DeviceEvent event) {
     switch (event) {
         case state::DeviceEvent::RideStarted:
             // Stacyjka wlaczona: rozbrojenie alarmu (§21), nowa sesja.
+            // Siatka bezpieczenstwa: jesli poprzedni przejazd nie zostal
+            // zarchiwizowany (restart na baterii), robimy to teraz.
+            archiveCurrentRide();
             g_alarm.disarm();
             driveSiren(guard::AlarmOutput{});
             g_metrics.startNewRide();
+            g_rideArchived = false;
             saveResultsIfDirty(true);
             g_orientation.resetAngles();
             setScreenOn(true);
@@ -613,9 +705,11 @@ void handleStateEvent(state::DeviceEvent event) {
             break;
 
         case state::DeviceEvent::PowerLost:
+            // Stacyjka zgaszona = przejazd skonczony -> do historii.
             // Bateria daje nam cale minuty na spokojny zapis — zadnego wyscigu
-            // z zanikajacym napieciem, wiec zapisujemy od razu.
+            // z zanikajacym napieciem.
             saveResultsIfDirty(true);
+            archiveCurrentRide();
             break;
 
         case state::DeviceEvent::ScreenOff:

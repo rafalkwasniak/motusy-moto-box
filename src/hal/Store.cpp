@@ -12,11 +12,16 @@ constexpr const char* kKeyOverall = "max";
 constexpr const char* kKeyRide = "ride";
 constexpr const char* kKeyAlarm = "alarm";
 constexpr const char* kKeyMount = "mount";
+constexpr const char* kKeyArchived = "arch";
+constexpr const char* kKeyHistory = "hist";
 
 /// Piec wartosci rekordowych, kolejnosc utrwalona przez kSchemaVersion.
 constexpr size_t kRideValuesBytes = 5 * sizeof(float);
 /// Flaga "skalibrowano" + dziewiec elementow macierzy obrotu.
 constexpr size_t kMountBytes = 1 + 9 * sizeof(float);
+/// Licznik wpisow + pelna pojemnosc historii.
+constexpr size_t kHistoryBytes =
+    1 + motion::RideHistory::kCapacity * kRideValuesBytes;
 
 void packFloat(uint8_t*& cursor, float value) {
     std::memcpy(cursor, &value, sizeof(float));
@@ -91,6 +96,22 @@ LoadResult Store::load(PersistentState& out) {
     }
 
     out.alarmEnabled = prefs_.getUChar(kKeyAlarm, 1) != 0;
+    out.rideArchived = prefs_.getUChar(kKeyArchived, 0) != 0;
+
+    {
+        uint8_t historyBuffer[kHistoryBytes];
+        if (prefs_.getBytes(kKeyHistory, historyBuffer, kHistoryBytes) == kHistoryBytes) {
+            const uint8_t* cursor = historyBuffer;
+            size_t count = *cursor++;
+            if (count > motion::RideHistory::kCapacity) count = motion::RideHistory::kCapacity;
+            motion::RideValues rides[motion::RideHistory::kCapacity];
+            for (size_t i = 0; i < motion::RideHistory::kCapacity; ++i) {
+                unpackRideValues(cursor, rides[i]);
+                cursor += kRideValuesBytes;
+            }
+            out.history.restore(rides, count);
+        }
+    }
 
     if (prefs_.getBytes(kKeyMount, buffer, kMountBytes) == kMountBytes) {
         const uint8_t* cursor = buffer;
@@ -103,7 +124,8 @@ LoadResult Store::load(PersistentState& out) {
     return LoadResult::Restored;
 }
 
-bool Store::saveResults(const motion::RideValues& overall, const motion::RideValues& ride) {
+bool Store::saveResults(const motion::RideValues& overall, const motion::RideValues& ride,
+                        bool rideArchived) {
     if (!available_) return false;
 
     uint8_t buffer[kRideValuesBytes];
@@ -114,6 +136,23 @@ bool Store::saveResults(const motion::RideValues& overall, const motion::RideVal
     packRideValues(ride, buffer);
     if (prefs_.putBytes(kKeyRide, buffer, kRideValuesBytes) != kRideValuesBytes) return false;
 
+    prefs_.putUChar(kKeyArchived, rideArchived ? 1 : 0);
+    prefs_.putUInt(kKeyVersion, kSchemaVersion);
+    return true;
+}
+
+bool Store::saveHistory(const motion::RideHistory& history) {
+    if (!available_) return false;
+
+    uint8_t buffer[kHistoryBytes];
+    uint8_t* cursor = buffer;
+    *cursor++ = static_cast<uint8_t>(history.count());
+    for (size_t i = 0; i < motion::RideHistory::kCapacity; ++i) {
+        packRideValues(history.at(i), cursor);
+        cursor += kRideValuesBytes;
+    }
+
+    if (prefs_.putBytes(kKeyHistory, buffer, kHistoryBytes) != kHistoryBytes) return false;
     prefs_.putUInt(kKeyVersion, kSchemaVersion);
     return true;
 }

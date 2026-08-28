@@ -12,6 +12,7 @@
 
 #include "MountCalibration.h"
 #include "Orientation.h"
+#include "RideHistory.h"
 #include "RideMetrics.h"
 
 using namespace motion;
@@ -359,6 +360,60 @@ void test_implausible_values_are_rejected() {
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, metrics.overall().maxAccelG);
 }
 
+RideValues rideWith(float lean) {
+    RideValues ride;
+    ride.maxLeanRightDeg = lean;
+    return ride;
+}
+
+void test_history_newest_first() {
+    RideHistory history;
+    history.push(rideWith(10.0f));
+    history.push(rideWith(20.0f));
+    history.push(rideWith(30.0f));
+
+    TEST_ASSERT_EQUAL_UINT32(3, history.count());
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 30.0f, history.at(0).maxLeanRightDeg);
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 20.0f, history.at(1).maxLeanRightDeg);
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 10.0f, history.at(2).maxLeanRightDeg);
+}
+
+void test_history_drops_oldest_beyond_capacity() {
+    RideHistory history;
+    for (int i = 1; i <= 13; ++i) history.push(rideWith(static_cast<float>(i)));
+
+    TEST_ASSERT_EQUAL_UINT32(RideHistory::kCapacity, history.count());
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 13.0f, history.at(0).maxLeanRightDeg);
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 4.0f, history.at(9).maxLeanRightDeg);
+}
+
+/// Krecenie kluczykiem bez jazdy nie moze zapelniac historii zerami.
+void test_history_skips_empty_rides() {
+    RideHistory history;
+    TEST_ASSERT_FALSE(history.push(RideValues{}));
+    TEST_ASSERT_EQUAL_UINT32(0, history.count());
+
+    // Indeks poza zakresem oddaje pusty zestaw zamiast smieci.
+    TEST_ASSERT_TRUE(isEmptyRide(history.at(5)));
+}
+
+void test_history_restore_preserves_order() {
+    RideHistory saved;
+    saved.push(rideWith(1.0f));
+    saved.push(rideWith(2.0f));
+    saved.push(rideWith(3.0f));
+
+    RideValues flat[RideHistory::kCapacity];
+    for (size_t i = 0; i < saved.count(); ++i) flat[i] = saved.at(i);
+
+    RideHistory loaded;
+    loaded.restore(flat, saved.count());
+
+    TEST_ASSERT_EQUAL_UINT32(3, loaded.count());
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 3.0f, loaded.at(0).maxLeanRightDeg);
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 1.0f, loaded.at(2).maxLeanRightDeg);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
 
@@ -381,6 +436,10 @@ int main(int, char**) {
     RUN_TEST(test_speed_record_needs_valid_fix);
     RUN_TEST(test_speed_record_rejects_noise_and_glitches);
     RUN_TEST(test_speed_follows_same_two_set_rules);
+    RUN_TEST(test_history_newest_first);
+    RUN_TEST(test_history_drops_oldest_beyond_capacity);
+    RUN_TEST(test_history_skips_empty_rides);
+    RUN_TEST(test_history_restore_preserves_order);
 
     return UNITY_END();
 }

@@ -69,7 +69,7 @@ void MainScreen::draw(ScreenBuffer& buffer, const MainScreenModel& model) {
 
     gfx->fillScreen(color::kBackground);
     drawStatusBar(gfx, model);
-    drawHeaders(gfx);
+    drawHeaders(gfx, model);
     drawRows(gfx, model);
 
     buffer.present();
@@ -113,14 +113,15 @@ void MainScreen::drawStatusBar(m5gfx::LovyanGFX* gfx, const MainScreenModel& mod
     gfx->drawFastHLine(0, layout::kStatusBarHeight, layout::kScreenWidth, color::kDivider);
 }
 
-void MainScreen::drawHeaders(m5gfx::LovyanGFX* gfx) {
+void MainScreen::drawHeaders(m5gfx::LovyanGFX* gfx, const MainScreenModel& model) {
     gfx->setFont(&fonts::Font0);
     gfx->setTextDatum(middle_center);
     gfx->setTextColor(color::kMuted);
 
     const int centerY = layout::kHeaderY + layout::kHeaderHeight / 2;
-    gfx->drawString("MAX", (layout::kColumnDividerX + 80) / 2, centerY);
-    gfx->drawString("LOTKA", (layout::kColumnDividerX + layout::kRideRightX) / 2, centerY);
+    gfx->drawString(model.leftHeader, (layout::kColumnDividerX + 80) / 2, centerY);
+    gfx->drawString(model.rightHeader, (layout::kColumnDividerX + layout::kRideRightX) / 2,
+                    centerY);
 
     gfx->drawFastVLine(layout::kColumnDividerX, layout::kHeaderY,
                        layout::kScreenHeight - layout::kHeaderY, color::kDivider);
@@ -136,29 +137,32 @@ void MainScreen::drawRows(m5gfx::LovyanGFX* gfx, const MainScreenModel& model) {
         gfx->setTextColor(color::kMuted);
         gfx->drawString(row.label, layout::kLabelX, centerY);
 
-        // Bez modulu GPS wiersz predkosci nie ma czego pokazac. Kreski zamiast
-        // zera, bo "0 km/h" wygladaloby jak zmierzony wynik.
-        const bool unavailable = row.kind == RowKind::Speed && !model.speedAvailable;
-
-        const float overallValue = model.overall.*(row.field);
-        const float rideValue = model.ride.*(row.field);
+        // Bez modulu GPS wiersz predkosci nie ma czego pokazac; pusty slot
+        // historii nie ma czego pokazac w ogole. Kreski zamiast zera, bo
+        // "0 km/h" wygladaloby jak zmierzony wynik.
+        const bool speedUnavailable = row.kind == RowKind::Speed && !model.speedAvailable;
 
         char text[12];
-        if (unavailable) {
+
+        if (!model.leftPresent || speedUnavailable) {
             drawValue(gfx, layout::kOverallRightX, centerY, "---", nullptr, false, color::kZero);
-            drawValue(gfx, layout::kRideRightX, centerY, "---", nullptr, false, color::kZero);
-            continue;
+        } else {
+            const float value = model.overall.*(row.field);
+            formatValue(text, sizeof(text), value, row.kind);
+            drawValue(gfx, layout::kOverallRightX, centerY, text, unitFor(row.kind),
+                      row.kind == RowKind::Degrees,
+                      value > 0.0f ? row.accent : color::kZero);
         }
 
-        formatValue(text, sizeof(text), overallValue, row.kind);
-        drawValue(gfx, layout::kOverallRightX, centerY, text, unitFor(row.kind),
-                  row.kind == RowKind::Degrees,
-                  overallValue > 0.0f ? row.accent : color::kZero);
-
-        formatValue(text, sizeof(text), rideValue, row.kind);
-        drawValue(gfx, layout::kRideRightX, centerY, text, unitFor(row.kind),
-                  row.kind == RowKind::Degrees,
-                  rideValue > 0.0f ? row.accent : color::kZero);
+        if (!model.rightPresent || speedUnavailable) {
+            drawValue(gfx, layout::kRideRightX, centerY, "---", nullptr, false, color::kZero);
+        } else {
+            const float value = model.ride.*(row.field);
+            formatValue(text, sizeof(text), value, row.kind);
+            drawValue(gfx, layout::kRideRightX, centerY, text, unitFor(row.kind),
+                      row.kind == RowKind::Degrees,
+                      value > 0.0f ? row.accent : color::kZero);
+        }
     }
 }
 

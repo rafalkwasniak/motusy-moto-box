@@ -17,6 +17,7 @@
 #include <Preferences.h>
 
 #include "MountCalibration.h"
+#include "RideHistory.h"
 #include "RideMetrics.h"
 
 namespace hal {
@@ -32,6 +33,13 @@ struct PersistentState {
 
     bool mountCalibrated = false;
     motion::Mat3 mountRotation;
+
+    /// Czy biezacy przejazd zostal juz przeniesiony do historii. Chroni przed
+    /// zdublowaniem wpisu, gdy po zaniku zasilania urzadzenie jeszcze raz
+    /// wstanie (np. po rozladowaniu baterii na parkingu).
+    bool rideArchived = false;
+
+    motion::RideHistory history;
 };
 
 enum class LoadResult {
@@ -53,8 +61,13 @@ public:
 
     LoadResult load(PersistentState& out);
 
-    /// Zapisuje oba zestawy wynikow. Wolane okresowo i przy zaniku zasilania.
-    bool saveResults(const motion::RideValues& overall, const motion::RideValues& ride);
+    /// Zapisuje oba zestawy wynikow wraz z flaga archiwizacji przejazdu.
+    /// Wolane okresowo i przy zaniku zasilania.
+    bool saveResults(const motion::RideValues& overall, const motion::RideValues& ride,
+                     bool rideArchived);
+
+    /// Zapisuje historie przejazdow. Wolane przy archiwizacji przejazdu.
+    bool saveHistory(const motion::RideHistory& history);
 
     /// §22.1 — stan alarmu zmienia sie rzadko, wiec zapisujemy go natychmiast.
     bool saveAlarmEnabled(bool enabled);
@@ -69,7 +82,8 @@ public:
 
     /// Wersja schematu danych. Podniesienie uniewaznia zapisane dane
     /// zamiast czytac je w zlym formacie.
-    static constexpr uint32_t kSchemaVersion = 1;
+    /// v2 (2026-08-28): historia przejazdow + flaga archiwizacji.
+    static constexpr uint32_t kSchemaVersion = 2;
 
 private:
     Preferences prefs_;

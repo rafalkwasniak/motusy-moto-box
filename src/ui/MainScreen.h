@@ -26,8 +26,18 @@
 namespace ui {
 
 struct MainScreenModel {
+    /// Dane lewej i prawej kolumny. Na ekranie glownym: MAX OGOLNIE i LOTKA;
+    /// na stronach historii: dwa kolejne przejazdy.
     motion::RideValues overall;
     motion::RideValues ride;
+
+    /// Naglowki kolumn. Historia podstawia numery przejazdow.
+    const char* leftHeader = "MAX";
+    const char* rightHeader = "LOTKA";
+
+    /// Pusty slot historii rysuje sie kreskami zamiast zerami.
+    bool leftPresent = true;
+    bool rightPresent = true;
 
     const char* stateLabel = "JAZDA";
     uint16_t stateColor = color::kRiding;
@@ -49,7 +59,7 @@ public:
 
 private:
     static void drawStatusBar(m5gfx::LovyanGFX* gfx, const MainScreenModel& model);
-    static void drawHeaders(m5gfx::LovyanGFX* gfx);
+    static void drawHeaders(m5gfx::LovyanGFX* gfx, const MainScreenModel& model);
     static void drawRows(m5gfx::LovyanGFX* gfx, const MainScreenModel& model);
 
     /// Sformatowana wartosc wyrownana do prawej krawedzi kolumny.
