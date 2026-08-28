@@ -80,6 +80,16 @@ input::ButtonFsmConfig makeButtonConfig() {
 
 input::ButtonFsm g_button{makeButtonConfig()};
 
+// ── Tryb stanowiskowy (MMB_BENCH) ──────────────────────────────────────────
+// Pozwala testowac sciezke alarmu przy WPIETYM USB: po 10 s od startu
+// zasilanie jest raportowane jako nieobecne, odliczanie trwa 20 s, a na
+// port szeregowy leci telemetria detekcji. MMB_BENCH_SLEEP wlacza dodatkowo
+// prawdziwy light sleep (peda serial — werdykt daje wtedy piszczenie).
+#ifdef MMB_BENCH
+constexpr uint32_t kBenchUnplugAtMs = 10000;
+bool effectiveExternalPower() { return millis() < kBenchUnplugAtMs; }
+#endif
+
 /// Progi maszyny stanow — czasy z §18 i z ustalen o odpornosci na rozruch.
 state::DeviceStateConfig makeStateConfig() {
     state::DeviceStateConfig config;
@@ -88,6 +98,10 @@ state::DeviceStateConfig makeStateConfig() {
     config.powerReturnConfirmMs = cfg::kPowerReturnConfirmMs;
     // Antydatowanie: pelen lancuch detekcji zaniku to okno tetna + potwierdzenie.
     config.detectionLatencyMs = cfg::kChargePulseHoldMs + cfg::kPowerLossConfirmMs;
+#ifdef MMB_BENCH
+    config.armingDelayMs = 20000;
+    config.detectionLatencyMs = 0;
+#endif
     return config;
 }
 
@@ -374,14 +388,19 @@ void refreshDisplay() {
         model.stateLabel = "IMU BRAK";
         model.stateColor = ui::color::kAlarm;
     } else if (g_deviceState.state() == state::DeviceState::Cooldown) {
-        // Odliczanie do zgaszenia ekranu — uzytkownik widzi, ile czasu zostalo,
-        // zanim urzadzenie samo przejdzie w czuwanie.
+        // Odliczanie do zgaszenia ekranu. Przy WYLACZONYM module ochrony
+        // odliczanie przeplata sie z ostrzezeniem — po tym, jak wylaczony
+        // modul raz przeszedl niezauwazony i "alarm nie dzialal".
         const uint32_t seconds = (untilOff + 999) / 1000;
-        std::snprintf(stateLabel, sizeof(stateLabel), "%lu:%02lu",
-                      static_cast<unsigned long>(seconds / 60),
-                      static_cast<unsigned long>(seconds % 60));
+        if (!g_alarmEnabled && (millis() / 2000) % 2 == 1) {
+            std::snprintf(stateLabel, sizeof(stateLabel), "BEZ OCHRONY");
+        } else {
+            std::snprintf(stateLabel, sizeof(stateLabel), "%lu:%02lu",
+                          static_cast<unsigned long>(seconds / 60),
+                          static_cast<unsigned long>(seconds % 60));
+        }
         model.stateLabel = stateLabel;
-        model.stateColor = ui::color::kWaiting;
+        model.stateColor = g_alarmEnabled ? ui::color::kWaiting : ui::color::kAlarm;
     } else if (!g_mount.isCalibrated()) {
         model.stateLabel = "BRAK KAL.";
         model.stateColor = ui::color::kWaiting;
@@ -553,6 +572,15 @@ void setup() {
     g_deviceState.begin(g_power.isExternal(), millis());
     restoreState(g_power.isExternal());
 
+#ifdef MMB_BENCH
+    // Test stanowiskowy wymaga wlaczonego modulu alarmu — wymuszenie naprawia
+    // przy okazji stan zapisany w NVS.
+    if (!g_alarmEnabled) {
+        g_alarmEnabled = true;
+        g_store.saveAlarmEnabled(true);
+    }
+#endif
+
     runSplash();
 
     Serial.printf("\n=== %s %s ===\n", cfg::kDeviceName, cfg::kFirmwareVersion);
@@ -645,8 +673,28 @@ void loop() {
         }
     }
 
-    handleStateEvent(g_deviceState.update(g_power.isExternal(), g_alarmEnabled,
+#ifdef MMB_BENCH
+    const bool externalPower = effectiveExternalPower();
+#else
+    const bool externalPower = g_power.isExternal();
+#endif
+    handleStateEvent(g_deviceState.update(externalPower, g_alarmEnabled,
                                           alarmOut.violation, nowMs));
+
+#ifdef MMB_BENCH
+    static uint32_t benchLastMs = 0;
+    if (nowMs - benchLastMs >= 1000) {
+        benchLastMs = nowMs;
+        Serial.printf("[bench] st=%-8s scr=%d armE=%d viol=%u imu=%.0fHz "
+                      "tilt=%.1f mag=%.2f pwr=%d sig=%d\n",
+                      state::stateName(g_deviceState.state()), g_screenOn ? 1 : 0,
+                      g_alarm.isArmed() ? 1 : 0, g_alarm.violationCount(),
+                      static_cast<double>(g_imu.sampleRateHz()),
+                      static_cast<double>(g_alarm.debugTiltDeg()),
+                      static_cast<double>(g_alarm.debugMagDeviationG()),
+                      externalPower ? 1 : 0, g_audioActive ? 1 : 0);
+    }
+#endif
 
     saveResultsIfDirty(false);
 
@@ -659,10 +707,15 @@ void loop() {
     // wylacznie na baterii, wiec utrata USB nie jest problemem. Przyciski
     // (GPIO 11/12, aktywne w stanie niskim) budza natychmiast.
     if (!g_screenOn && g_deviceState.maySleep() && !g_audioActive) {
+#if defined(MMB_BENCH) && !defined(MMB_BENCH_SLEEP)
+        // Faza 1 testu stanowiskowego: bez light sleep, zeby serial zyl.
+        delay(cfg::kArmedSampleIntervalMs);
+#else
         gpio_wakeup_enable(GPIO_NUM_11, GPIO_INTR_LOW_LEVEL);
         gpio_wakeup_enable(GPIO_NUM_12, GPIO_INTR_LOW_LEVEL);
         esp_sleep_enable_gpio_wakeup();
         esp_sleep_enable_timer_wakeup(cfg::kArmedSampleIntervalMs * 1000ULL);
         esp_light_sleep_start();
+#endif
     }
 }

@@ -88,6 +88,10 @@ public:
     /// Aktualny licznik naruszen (dla diagnostyki).
     uint8_t violationCount() const { return violationCount_; }
 
+    /// Ostatnio policzone wartosci detekcji — do telemetrii i strojenia progow.
+    float debugTiltDeg() const { return lastTiltDeg_; }
+    float debugMagDeviationG() const { return lastMagDeviationG_; }
+
 private:
     bool detectCondition(const motion::ImuSample& sample);
     void renderPattern(AlarmOutput& out, uint32_t nowMs);
@@ -110,6 +114,9 @@ private:
     bool signalling_ = false;
     uint8_t signalStage_ = 0;
     uint32_t patternStartMs_ = 0;
+
+    float lastTiltDeg_ = 0.0f;
+    float lastMagDeviationG_ = 0.0f;
 };
 
 }  // namespace guard

@@ -14,9 +14,11 @@ constexpr float kFilterAlpha = 0.2f;
 constexpr uint16_t kWarnFreqHz = 2500;
 /// Syrena: plynny przestroj miedzy tymi czestotliwosciami — brzmi jak
 /// klasyczny alarm, nie jak przelaczanie dwoch piskow.
-constexpr uint16_t kSirenLoHz = 1000;
-constexpr uint16_t kSirenHiHz = 3000;
-constexpr uint32_t kSirenSweepMs = 1200;     // pelny cykl gora-dol
+/// Zakres i tempo dostrojone na sluch na sprzecie (2026-08-28): wyzsze tony
+/// niosa sie lepiej z malego glosnika, a wolniejszy cykl brzmi powazniej.
+constexpr uint16_t kSirenLoHz = 2000;
+constexpr uint16_t kSirenHiHz = 3600;
+constexpr uint32_t kSirenSweepMs = 2800;     // pelny cykl nisko-wysoko-nisko
 
 /// Czasy wzorcow (§20 zostawia je implementacji).
 constexpr uint32_t kStage1BeepMs = 250;      // 5 piknięc
@@ -67,6 +69,9 @@ bool AlarmEngine::detectCondition(const motion::ImuSample& sample) {
     // Zaburzenie modulu liczone z surowej probki — wygladzanie stlumiloby
     // wlasnie te szarpniecia, ktorych szukamy.
     const float magDeviation = std::fabs(sample.accelG.norm() - 1.0f);
+
+    lastTiltDeg_ = tiltDeg;
+    lastMagDeviationG_ = magDeviation;
 
     return tiltDeg > config_.tiltThresholdDeg || magDeviation > config_.accelThresholdG;
 }
