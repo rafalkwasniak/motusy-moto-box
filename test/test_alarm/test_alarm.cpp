@@ -22,7 +22,7 @@ AlarmConfig testConfig() {
     config.accelThresholdG = 0.12f;
     config.sustainMs = 250;
     config.retriggerGapMs = 2000;
-    config.decayMs = 60000;
+    config.escalationResetMs = 120000;
     return config;
 }
 
@@ -146,20 +146,31 @@ void test_siren_wails_until_disarmed() {
     TEST_ASSERT_FALSE(engine.update(&quiet, now).sirenOn);
 }
 
-void test_quiet_period_decays_escalation() {
+/// Po ciszy licznik wraca DO ZERA, nie o jeden stopien — kolejna osoba przy
+/// motocyklu ma dostac lagodne ostrzezenie nr 1, a nie odziedziczyc poziom.
+void test_quiet_period_resets_escalation_to_zero() {
     AlarmConfig config = testConfig();
-    config.decayMs = 2000;  // szybszy zanik na potrzeby testu
+    config.escalationResetMs = 3000;  // szybszy reset na potrzeby testu
     AlarmEngine engine{config};
     uint32_t now = 1000;
     engine.arm(Vec3{0.0f, 0.0f, 1.0f}, now);
 
+    // Dwa naruszenia: licznik na 2.
+    run(engine, tilted(10.0f), now, 600);
+    run(engine, still(), now, 2500);
     run(engine, tilted(10.0f), now, 600);
     run(engine, still(), now, 1000);
-    TEST_ASSERT_EQUAL(1, engine.violationCount());
+    TEST_ASSERT_EQUAL(2, engine.violationCount());
 
-    // Po dwoch okresach ciszy licznik opada do zera.
+    // Cisza dluzsza niz prog: pelny reset, nie zejscie do 1.
     run(engine, still(), now, 5000);
-    TEST_ASSERT_EQUAL(0, engine.violationCount());
+    TEST_ASSERT_EQUAL_MESSAGE(0, engine.violationCount(),
+                              "Licznik ma wrocic do zera, nie opasc o stopien");
+
+    // Kolejne naruszenie zaczyna od poziomu 1.
+    run(engine, tilted(10.0f), now, 600);
+    TEST_ASSERT_EQUAL_MESSAGE(1, engine.violationCount(),
+                              "Po resecie kolejna osoba dostaje ostrzezenie nr 1");
 }
 
 void test_disarm_silences_immediately() {
@@ -216,7 +227,7 @@ int main(int, char**) {
     RUN_TEST(test_sustained_tilt_triggers_stage1);
     RUN_TEST(test_escalation_reaches_continuous_siren);
     RUN_TEST(test_siren_wails_until_disarmed);
-    RUN_TEST(test_quiet_period_decays_escalation);
+    RUN_TEST(test_quiet_period_resets_escalation_to_zero);
     RUN_TEST(test_disarm_silences_immediately);
     RUN_TEST(test_stage_limit_for_low_battery);
     RUN_TEST(test_reference_is_arming_position_not_vertical);

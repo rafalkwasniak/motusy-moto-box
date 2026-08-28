@@ -24,7 +24,12 @@
 //                                  stacyjki albo rozladowania baterii.
 //                                  Decyzja uzytkownika z 2026-08-28: alarm ma
 //                                  ostrzegac, gdy ktos odchodzi z motocyklem.
-// Po cichej minucie poziom eskalacji opada o stopien (dotyczy stopni 1-2).
+// WYGASZANIE. Po `escalationResetMs` ciszy licznik naruszen wraca DO ZERA,
+// nie o jeden stopien. Bez tego przypadkowe trykniecia sumowalyby sie przez
+// caly postoj: ktos trykna motocykl na zlocie i odejdzie, pol godziny pozniej
+// druga osoba ociera sie o niego i dostaje syrene, choc to jej pierwszy kontakt.
+// Kazdy "nowy gosc" ma dostac lagodne ostrzezenie nr 1.
+// Trwajaca sygnalizacja nie jest przerywana — syrena wyje az do rozbrojenia.
 
 #pragma once
 
@@ -44,8 +49,8 @@ struct AlarmConfig {
     /// Minimalny odstep miedzy kolejnymi zliczonymi naruszeniami [ms] —
     /// jedno dluzsze szarpniecie to jedno naruszenie, nie dziesiec.
     uint32_t retriggerGapMs = 2000;
-    /// Po jakim czasie ciszy poziom eskalacji opada o stopien [ms].
-    uint32_t decayMs = 60000;
+    /// Po jakim czasie ciszy licznik naruszen wraca do zera [ms].
+    uint32_t escalationResetMs = 120000;
     /// Najwyzszy dozwolony stopien (strukturalny sufit eskalacji).
     uint8_t maxStage = 3;
 };

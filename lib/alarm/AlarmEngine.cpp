@@ -113,10 +113,13 @@ AlarmOutput AlarmEngine::update(const motion::ImuSample* sample, uint32_t nowMs)
     }
 
     // ── Wygaszanie eskalacji po ciszy ──────────────────────────────────────
-    if (!conditionActive_ && violationCount_ > 0 &&
-        nowMs - quietSinceMs_ >= config_.decayMs) {
-        --violationCount_;
-        quietSinceMs_ = nowMs;
+    // Pelny reset, nie dekrementacja: po dluzszej ciszy kolejna osoba przy
+    // motocyklu zaczyna od lagodnego ostrzezenia nr 1, a nie od poziomu
+    // odziedziczonego po kims, kto trykna motocykl kwadrans wczesniej.
+    // Warunek `!signalling_` chroni trwajaca syrene przed wyciszeniem.
+    if (!conditionActive_ && !signalling_ && violationCount_ > 0 &&
+        nowMs - quietSinceMs_ >= config_.escalationResetMs) {
+        violationCount_ = 0;
     }
 
     // ── Wzorzec dzwiekowy ──────────────────────────────────────────────────

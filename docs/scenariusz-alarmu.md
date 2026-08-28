@@ -45,7 +45,12 @@ złodziej odchodzący z motocyklem ma słyszeć syrenę.
 - Zdjęty: limit 30 s syreny. Zdjęty: tryb oszczędzania przy słabej baterii.
   Ma ostrzegać — jak się rozładuje, to się rozładuje.
 - Po zakończeniu piknięć stopnia 1/2 bez dalszego ruchu: ekran gaśnie,
-  czuwanie trwa. Cicha minuta obniża licznik eskalacji o stopień.
+  czuwanie trwa.
+- **Reset eskalacji po 2 minutach ciszy — do zera, nie o stopień.** Bez tego
+  przypadkowe trącenia sumowałyby się przez cały postój: ktoś trąca motocykl
+  na zlocie i odchodzi, pół godziny później druga osoba ociera się o niego
+  i dostaje syrenę, choć to jej pierwszy kontakt. Każdy „nowy gość" ma dostać
+  łagodne ostrzeżenie nr 1. Trwająca syrena nie jest przerywana.
 - Po **każdej** sygnalizacji tor audio jest wyłączany → koniec trzeszczenia
   z głośnika w czuwaniu.
 
