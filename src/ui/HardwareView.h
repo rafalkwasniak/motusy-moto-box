@@ -25,6 +25,10 @@ struct HardwareViewModel {
     /// Najdluzsza zaobserwowana przerwa miedzy impulsami ladowania [ms].
     uint32_t maxPulseGapMs = 0;
     const char* stateName = "";
+    /// Modul alarmowy wlaczony przez uzytkownika (§16).
+    bool alarmEnabled = false;
+    /// Silnik alarmu faktycznie czuwa. Rozjazd tych dwoch wartosci oznacza blad.
+    bool alarmArmed = false;
     bool bufferedDisplay = false;
     uint32_t freeHeapBytes = 0;
     uint32_t freePsramBytes = 0;
@@ -39,8 +43,9 @@ private:
     static constexpr int kListTop = 26;
     static constexpr int kListStep = 13;
     static constexpr int kUnknownY = 92;
-    static constexpr int kPowerY = 108;
-    static constexpr int kMemoryY = 122;
+    static constexpr int kPowerY = 104;
+    static constexpr int kAlarmY = 116;
+    static constexpr int kMemoryY = 128;
 };
 
 }  // namespace ui

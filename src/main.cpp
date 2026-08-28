@@ -363,11 +363,15 @@ void pumpImu() {
 
     g_orientation.update(sample, dtSec);
 
-    // Bez kalibracji montazu uklad odniesienia jest przypadkowy: polozenie
-    // urzadzenia na boku daje wtedy 60 stopni przechylu w obie strony naraz.
-    // Estymator dziala dalej (widac go w diagnostyce), ale rekordow nie zbieramy,
-    // bo zapisalyby sie smieci — i to do MAX OGOLNIE, ktore przezywa restart.
-    if (g_mount.isCalibrated()) {
+    // Rekordy zbieramy WYLACZNIE w trakcie jazdy (§17, §18: po zgasnieciu
+    // stacyjki wyniki pozostaja niezmienione). Bez tego warunku manipulowanie
+    // urzadzeniem na parkingu — zdjecie z uchwytu, przenoszenie, uzbrajanie
+    // alarmu pod skosem — ustanawialo rekordy 60 stopni w MAX OGOLNIE.
+    //
+    // Drugi warunek: bez kalibracji montazu uklad odniesienia jest przypadkowy,
+    // wiec rekordy byly by smieciami. Estymator dziala dalej (widac go
+    // w diagnostyce), tylko nic nie zapisujemy.
+    if (g_mount.isCalibrated() && g_deviceState.state() == state::DeviceState::Riding) {
         g_metrics.update(g_orientation.state());
     }
 }
@@ -435,6 +439,8 @@ void refreshDisplay() {
         model.externalPower = g_power.isExternal();
         model.maxPulseGapMs = g_power.maxPulseGapMs();
         model.stateName = state::stateName(g_deviceState.state());
+        model.alarmEnabled = g_alarmEnabled;
+        model.alarmArmed = g_alarm.isArmed();
         model.bufferedDisplay = g_buffer.isBuffered();
         model.freeHeapBytes = ESP.getFreeHeap();
         model.freePsramBytes = ESP.getFreePsram();
@@ -783,9 +789,27 @@ void loop() {
 
     g_power.update(nowMs);
 
+    // §16 — TWARDA GWARANCJA: wylaczony modul oznacza zero czuwania i zero
+    // dzwieku, niezaleznie od tego, jaka sciezka doprowadzila do biezacego
+    // stanu. Sprawdzane w kazdej iteracji, nie tylko przy zmianie stanu.
+    if (!g_alarmEnabled && g_alarm.isArmed()) {
+        g_alarm.disarm();
+        driveSiren(guard::AlarmOutput{});
+    }
+
+    const state::DeviceState deviceState = g_deviceState.state();
+
+    // REGULA NACZELNA jako funkcja stanu, nie zdarzenia. Przejscie
+    // Idle -> Armed (wlaczenie modulu przy juz zgaszonym ekranie) nie generuje
+    // zdarzenia ScreenOff, wiec bez tego silnik zostawalby nieuzbrojony mimo
+    // napisu ALARM na ekranie.
+    if (g_alarmEnabled && !g_alarm.isArmed() && !g_screenOn && g_haveSampleEver &&
+        deviceState == state::DeviceState::Armed) {
+        g_alarm.arm(g_lastSample.accelG, nowMs);
+    }
+
     // Silnik alarmu pracuje tylko w stanach czuwania i sygnalizacji.
     guard::AlarmOutput alarmOut;
-    const state::DeviceState deviceState = g_deviceState.state();
     if (g_alarm.isArmed() && (deviceState == state::DeviceState::Armed ||
                               deviceState == state::DeviceState::Triggered)) {
         alarmOut = g_alarm.update(g_haveNewSample ? &g_lastSample : nullptr, nowMs);
