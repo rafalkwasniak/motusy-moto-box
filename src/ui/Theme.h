@@ -62,8 +62,11 @@ constexpr int kRowTop = 28;
 constexpr int kRowHeight = 21;
 constexpr int kRowCount = 5;
 
-/// Kolumny: etykieta, MAX OGOLNIE, OSTATNIA JAZDA.
+/// Kolumny: etykieta | MAX OGOLNIE | OSTATNIA JAZDA.
+/// Dwa dzielniki dobrane tak, zeby obie kolumny wartosci mialy niemal rowna
+/// szerokosc (82 i 81 px), a etykiety zachowaly zapas na najdluzsza z nich.
 constexpr int kLabelX = kContentLeft;
+constexpr int kLabelDividerX = 72;
 constexpr int kOverallRightX = 148;
 constexpr int kRideRightX = kContentRight;
 constexpr int kColumnDividerX = 154;

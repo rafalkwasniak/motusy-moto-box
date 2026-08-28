@@ -119,12 +119,16 @@ void MainScreen::drawHeaders(m5gfx::LovyanGFX* gfx, const MainScreenModel& model
     gfx->setTextColor(color::kMuted);
 
     const int centerY = layout::kHeaderY + layout::kHeaderHeight / 2;
-    gfx->drawString(model.leftHeader, (layout::kColumnDividerX + 80) / 2, centerY);
+    gfx->drawString(model.leftHeader,
+                    (layout::kLabelDividerX + layout::kColumnDividerX) / 2, centerY);
     gfx->drawString(model.rightHeader, (layout::kColumnDividerX + layout::kRideRightX) / 2,
                     centerY);
 
-    gfx->drawFastVLine(layout::kColumnDividerX, layout::kHeaderY,
-                       layout::kScreenHeight - layout::kHeaderY, color::kDivider);
+    // Dwie pionowe linie: etykiety | wartosci | wartosci.
+    const int lineTop = layout::kHeaderY;
+    const int lineHeight = layout::kScreenHeight - layout::kHeaderY;
+    gfx->drawFastVLine(layout::kLabelDividerX, lineTop, lineHeight, color::kDivider);
+    gfx->drawFastVLine(layout::kColumnDividerX, lineTop, lineHeight, color::kDivider);
 }
 
 void MainScreen::drawRows(m5gfx::LovyanGFX* gfx, const MainScreenModel& model) {
