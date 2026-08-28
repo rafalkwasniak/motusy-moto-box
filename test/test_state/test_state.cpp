@@ -154,6 +154,23 @@ void test_silence_returns_to_idle() {
     TEST_ASSERT_EQUAL(DeviceState::Idle, fsm.state());
 }
 
+void test_rearm_returns_from_triggered_to_armed() {
+    DeviceStateMachine fsm{testConfig()};
+    uint32_t now = 1000;
+    fsm.begin(true, now);
+    advance(fsm, false, true, now, 6000);
+    advance(fsm, false, true, now, kArmingMs + 5000);
+    fsm.update(false, true, true, now);
+    TEST_ASSERT_EQUAL(DeviceState::Triggered, fsm.state());
+
+    fsm.rearm();
+    TEST_ASSERT_EQUAL_MESSAGE(DeviceState::Armed, fsm.state(),
+                              "Po sygnalizacji alarm ma pilnowac dalej");
+
+    // Kolejny ruch wyzwala ponownie.
+    TEST_ASSERT_EQUAL(DeviceEvent::MotionDetected, fsm.update(false, true, true, now));
+}
+
 void test_countdown_reports_remaining_time() {
     DeviceStateMachine fsm{testConfig()};
     uint32_t now = 1000;
@@ -175,6 +192,7 @@ int main(int, char**) {
     RUN_TEST(test_alarm_never_arms_while_powered);
     RUN_TEST(test_motion_triggers_only_when_armed);
     RUN_TEST(test_silence_returns_to_idle);
+    RUN_TEST(test_rearm_returns_from_triggered_to_armed);
     RUN_TEST(test_countdown_reports_remaining_time);
     return UNITY_END();
 }

@@ -50,6 +50,15 @@ constexpr uint32_t kButtonResetHoldMs = 2000;
 /// §22.3 — prog uruchomienia kalibracji.
 constexpr uint32_t kButtonCalibrationHoldMs = 4000;
 
+// ── Alarm i dzwiek ─────────────────────────────────────────────────────────
+/// Glosnosc sygnalizacji 0-255. Wbudowany glosnik 1 W jest zaskakujaco donosny.
+constexpr uint8_t kSpeakerVolume = 255;
+/// Ponizej tego poziomu baterii alarm ogranicza sie do krotkich sygnalow
+/// (stopien 1), zeby zachowac zdolnosc czuwania.
+constexpr int kLowBatteryPercent = 20;
+/// Odstep miedzy probkami IMU w czuwaniu — light sleep miedzy nimi [ms].
+constexpr uint32_t kArmedSampleIntervalMs = 40;
+
 // ── Akwizycja IMU ──────────────────────────────────────────────────────────
 /// Docelowa czestotliwosc probkowania. Dynamika motocykla miesci sie ponizej
 /// 20 Hz, wiec 100 Hz daje komfortowy zapas — patrz architektura §8.

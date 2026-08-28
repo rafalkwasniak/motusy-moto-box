@@ -98,6 +98,11 @@ void DeviceStateMachine::silence(uint32_t nowMs) {
     powerLostAtMs_ = nowMs;
 }
 
+void DeviceStateMachine::rearm() {
+    if (state_ != DeviceState::Triggered) return;
+    state_ = DeviceState::Armed;
+}
+
 const char* stateName(DeviceState state) {
     switch (state) {
         case DeviceState::Riding: return "LOTKA";

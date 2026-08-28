@@ -5,15 +5,18 @@
 //   E5  pamiec nieulotna: wyniki, kalibracja, stan alarmu
 //   E7  przycisk — trzy progi czasowe (§22, §23)
 //   E6  maszyna stanow zasilania — wykrywanie stacyjki, gaszenie ekranu
+//   E8  alarm: detekcja ruchu, sygnalizacja glosnikiem, light sleep w czuwaniu
 //
 // Pozostaje:
-//   E3  rejestrator surowych danych do CSV
-//   E8  detekcja ruchu i sygnalizacja alarmowa
+//   E3  rejestrator surowych danych do CSV (czeka na GPS i motocykl)
 //   GPS parser NMEA, predkosc do filtru i do rekordow
 
 #include <Arduino.h>
 #include <M5Unified.h>
+#include <driver/gpio.h>
+#include <esp_sleep.h>
 
+#include "AlarmEngine.h"
 #include "ButtonFsm.h"
 #include "DeviceStateMachine.h"
 #include "Orientation.h"
@@ -81,6 +84,12 @@ state::DeviceStateConfig makeStateConfig() {
 
 state::DeviceStateMachine g_deviceState{makeStateConfig()};
 bool g_screenOn = true;
+
+guard::AlarmEngine g_alarm;
+motion::ImuSample g_lastSample;
+bool g_haveNewSample = false;
+bool g_sirenPlaying = false;
+uint16_t g_sirenFreqHz = 0;
 
 bool g_imuAvailable = false;
 bool g_alarmEnabled = true;
@@ -282,6 +291,9 @@ void pumpImu() {
     const float dtSec = static_cast<float>(nowMicros - g_lastSampleMicros) / 1e6f;
     g_lastSampleMicros = nowMicros;
 
+    g_lastSample = sample;
+    g_haveNewSample = true;
+
     g_orientation.update(sample, dtSec);
 
     // Bez kalibracji montazu uklad odniesienia jest przypadkowy: polozenie
@@ -366,6 +378,21 @@ void refreshDisplay() {
     g_mainScreen.draw(g_buffer, model);
 }
 
+/// Sterowanie glosnikiem wedlug decyzji silnika alarmu. Ton gra do odwolania,
+/// wiec wolamy tone() tylko przy zmianie — nie w kazdej iteracji petli.
+void driveSiren(const guard::AlarmOutput& out) {
+    if (out.sirenOn) {
+        if (!g_sirenPlaying || out.freqHz != g_sirenFreqHz) {
+            M5.Speaker.tone(out.freqHz);
+            g_sirenPlaying = true;
+            g_sirenFreqHz = out.freqHz;
+        }
+    } else if (g_sirenPlaying) {
+        M5.Speaker.stop();
+        g_sirenPlaying = false;
+    }
+}
+
 /// Gaszenie i zapalanie ekranu. Podswietlenie zjada wiekszosc pradu, wiec
 /// w czuwaniu musi byc naprawde wylaczone, nie tylko wygaszone na czarno.
 void setScreenOn(bool on) {
@@ -402,6 +429,8 @@ void handleButtons() {
             // wycisza — inaczej falszywy alarm da sie uciszyc tylko stacyjka.
             if (g_deviceState.state() == state::DeviceState::Triggered) {
                 g_deviceState.silence(millis());
+                g_alarm.disarm();
+                driveSiren(guard::AlarmOutput{});
             }
             toggleAlarm();
             resumeAfterAction();
@@ -424,6 +453,7 @@ void handleButtons() {
 void setup() {
     auto config = M5.config();
     config.internal_imu = true;
+    config.internal_spk = true;
     config.clear_display = true;
     // Wyjscie 5 V na Grove wlaczymy dopiero razem z modulem GPS — teraz
     // niepotrzebnie obciazaloby baterie.
@@ -432,6 +462,7 @@ void setup() {
 
     M5.Display.setRotation(cfg::kDisplayRotation);
     M5.Display.setBrightness(cfg::kDisplayBrightness);
+    M5.Speaker.setVolume(cfg::kSpeakerVolume);
 
     Serial.begin(115200);
 
@@ -475,7 +506,9 @@ void setup() {
 void handleStateEvent(state::DeviceEvent event) {
     switch (event) {
         case state::DeviceEvent::RideStarted:
-            // Stacyjka wlaczona: nowa sesja, LOTKA od zera, MAX bez zmian.
+            // Stacyjka wlaczona: rozbrojenie alarmu (§21), nowa sesja.
+            g_alarm.disarm();
+            driveSiren(guard::AlarmOutput{});
             g_metrics.startNewRide();
             saveResultsIfDirty(true);
             g_orientation.resetAngles();
@@ -492,11 +525,27 @@ void handleStateEvent(state::DeviceEvent event) {
         case state::DeviceEvent::ScreenOff:
             saveResultsIfDirty(true);
             setScreenOn(false);
+            if (g_alarmEnabled && g_haveNewSample) {
+                // Pozycja odniesienia = pozycja w momencie uzbrojenia, wiec
+                // motocykl na bocznej stopce nie wywola wlasnego alarmu.
+                // Przy slabej baterii ograniczamy eskalacje do krotkich
+                // sygnalow — czuwanie jest wazniejsze niz glosnosc.
+                guard::AlarmConfig alarmConfig = g_alarm.config();
+                alarmConfig.maxStage =
+                    M5.Power.getBatteryLevel() <= cfg::kLowBatteryPercent ? 1 : 3;
+                g_alarm.setConfig(alarmConfig);
+                g_alarm.arm(g_lastSample.accelG, millis());
+            }
             break;
 
         case state::DeviceEvent::MotionDetected:
+            // Ekran budzi sie z komunikatem RUCH! — sygnalizacja ma informowac
+            // osobe poruszajaca motocykl, ze zostala zauwazona (§20).
+            setScreenOn(true);
+            break;
+
         case state::DeviceEvent::AlarmCleared:
-            // TODO(E8): sygnalizacja dzwiekowa i eskalacja (§20).
+            driveSiren(guard::AlarmOutput{});
             break;
 
         case state::DeviceEvent::None:
@@ -513,8 +562,25 @@ void loop() {
     handleButtons();
 
     g_power.update(nowMs);
-    // TODO(E8): ostatni argument to wynik detektora ruchu.
-    handleStateEvent(g_deviceState.update(g_power.isExternal(), g_alarmEnabled, false, nowMs));
+
+    // Silnik alarmu pracuje tylko w stanach czuwania i sygnalizacji.
+    guard::AlarmOutput alarmOut;
+    const state::DeviceState deviceState = g_deviceState.state();
+    if (g_alarm.isArmed() && (deviceState == state::DeviceState::Armed ||
+                              deviceState == state::DeviceState::Triggered)) {
+        alarmOut = g_alarm.update(g_haveNewSample ? &g_lastSample : nullptr, nowMs);
+        g_haveNewSample = false;
+        driveSiren(alarmOut);
+
+        // Sygnalizacja dobiegla konca -> wracamy do cichego czuwania.
+        if (deviceState == state::DeviceState::Triggered && !alarmOut.signalling) {
+            g_deviceState.rearm();
+            setScreenOn(false);
+        }
+    }
+
+    handleStateEvent(g_deviceState.update(g_power.isExternal(), g_alarmEnabled,
+                                          alarmOut.violation, nowMs));
 
     saveResultsIfDirty(false);
 
@@ -529,7 +595,14 @@ void loop() {
         refreshDisplay();
     }
 
-    // Przy zgaszonym ekranie nie ma po co krecic petla z pelna predkoscia.
-    // Wlasciwy light sleep wchodzi razem z detektorem ruchu w etapie E8.
-    if (!g_screenOn) delay(20);
+    // Light sleep miedzy probkami IMU (~25 Hz czuwania). Ten stan istnieje
+    // wylacznie na baterii, wiec utrata USB nie jest problemem. Przyciski
+    // (GPIO 11/12, aktywne w stanie niskim) budza natychmiast.
+    if (!g_screenOn && g_deviceState.maySleep() && !g_sirenPlaying) {
+        gpio_wakeup_enable(GPIO_NUM_11, GPIO_INTR_LOW_LEVEL);
+        gpio_wakeup_enable(GPIO_NUM_12, GPIO_INTR_LOW_LEVEL);
+        esp_sleep_enable_gpio_wakeup();
+        esp_sleep_enable_timer_wakeup(cfg::kArmedSampleIntervalMs * 1000ULL);
+        esp_light_sleep_start();
+    }
 }

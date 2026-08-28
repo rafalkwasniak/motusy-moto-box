@@ -113,6 +113,10 @@ public:
     /// Wycisza trwajaca sygnalizacje i wraca do czuwania — reakcja na przycisk.
     void silence(uint32_t nowMs);
 
+    /// Automatyczny powrot z Triggered do Armed po zakonczeniu sygnalizacji —
+    /// alarm ma pilnowac dalej, nie zostac na zawsze w stanie "RUCH!".
+    void rearm();
+
 private:
     /// Filtruje sygnal zasilania. Zwraca stan potwierdzony czasowo.
     bool debouncePower(bool externalPower, uint32_t nowMs);
