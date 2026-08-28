@@ -26,6 +26,9 @@
 #include "hal/ImuSource.h"
 #include "hal/PowerSource.h"
 #include "hal/Store.h"
+#if MMB_RAW_LOGGER
+#include "log/RawLogger.h"
+#endif
 #include "ui/HardwareView.h"
 #include "ui/HoldPrompt.h"
 #include "ui/LiveView.h"
@@ -54,6 +57,10 @@ hal::PowerSourceConfig makePowerConfig() {
 }
 
 hal::PowerSource g_power{makePowerConfig()};
+
+#if MMB_RAW_LOGGER
+rawlog::RawLogger g_logger;
+#endif
 
 ui::ScreenBuffer g_buffer;
 ui::MainScreen g_mainScreen;
@@ -349,6 +356,10 @@ void pumpImu() {
     g_lastSample = sample;
     g_haveNewSample = true;
     g_haveSampleEver = true;
+
+#if MMB_RAW_LOGGER
+    g_logger.log(sample);
+#endif
 
     g_orientation.update(sample, dtSec);
 
@@ -669,6 +680,16 @@ void setup() {
     }
 #endif
 
+#if MMB_RAW_LOGGER
+    if (g_logger.begin()) {
+        // Boot z zasilaniem = trwajaca sesja jazdy; zdarzenie RideStarted nie
+        // padnie, wiec sesje zapisu otwieramy tutaj.
+        if (g_deviceState.state() == state::DeviceState::Riding) {
+            g_logger.startSession(millis());
+        }
+    }
+#endif
+
     runSplash();
 
     Serial.printf("\n=== %s %s ===\n", cfg::kDeviceName, cfg::kFirmwareVersion);
@@ -681,6 +702,11 @@ void setup() {
                   M5.Power.getBatteryLevel(), g_power.batteryMillivolts(),
                   g_power.isExternal() ? "ZEWNETRZNE" : "bateria",
                   g_power.rawCharging() ? "tak" : "nie");
+#if MMB_RAW_LOGGER
+    Serial.printf("Rejestrator: %s, sesja: %s (komendy: L, D<nr>, X)\n",
+                  g_logger.isMounted() ? "OK" : "BLAD PARTYCJI",
+                  g_logger.isLogging() ? "AKTYWNA" : "nie");
+#endif
     Serial.printf("RAM wolne: %u B, PSRAM wolne: %u B\n",
                   static_cast<unsigned>(ESP.getFreeHeap()),
                   static_cast<unsigned>(ESP.getFreePsram()));
@@ -698,6 +724,9 @@ void handleStateEvent(state::DeviceEvent event) {
             driveSiren(guard::AlarmOutput{});
             g_metrics.startNewRide();
             g_rideArchived = false;
+#if MMB_RAW_LOGGER
+            g_logger.startSession(millis());
+#endif
             saveResultsIfDirty(true);
             g_orientation.resetAngles();
             setScreenOn(true);
@@ -710,6 +739,9 @@ void handleStateEvent(state::DeviceEvent event) {
             // z zanikajacym napieciem.
             saveResultsIfDirty(true);
             archiveCurrentRide();
+#if MMB_RAW_LOGGER
+            g_logger.stopSession();
+#endif
             break;
 
         case state::DeviceEvent::ScreenOff:
@@ -791,6 +823,10 @@ void loop() {
 #endif
 
     saveResultsIfDirty(false);
+
+#if MMB_RAW_LOGGER
+    g_logger.handleSerial(Serial);
+#endif
 
     if (g_screenOn && nowMs - g_lastDisplayMs >= cfg::kDisplayRefreshMs) {
         g_lastDisplayMs = nowMs;
