@@ -1,0 +1,8 @@
+# PlatformIO
+.pio/
+
+# System
+.DS_Store
+
+# IDE
+.vscode/

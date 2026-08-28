@@ -1,0 +1,535 @@
+// Motusy Moto Box — punkt wejscia firmware.
+//
+// Zaimplementowane:
+//   E2  start urzadzenia, ekran startowy, BMI270, estymacja orientacji, dwa widoki
+//   E5  pamiec nieulotna: wyniki, kalibracja, stan alarmu
+//   E7  przycisk — trzy progi czasowe (§22, §23)
+//   E6  maszyna stanow zasilania — wykrywanie stacyjki, gaszenie ekranu
+//
+// Pozostaje:
+//   E3  rejestrator surowych danych do CSV
+//   E8  detekcja ruchu i sygnalizacja alarmowa
+//   GPS parser NMEA, predkosc do filtru i do rekordow
+
+#include <Arduino.h>
+#include <M5Unified.h>
+
+#include "ButtonFsm.h"
+#include "DeviceStateMachine.h"
+#include "Orientation.h"
+#include "RideMetrics.h"
+#include "config.h"
+#include "hal/I2cScan.h"
+#include "hal/ImuSource.h"
+#include "hal/PowerSource.h"
+#include "hal/Store.h"
+#include "ui/HardwareView.h"
+#include "ui/HoldPrompt.h"
+#include "ui/LiveView.h"
+#include "ui/MainScreen.h"
+#include "ui/ScreenBuffer.h"
+#include "ui/SplashScreen.h"
+#include "ui/Text.h"
+
+namespace {
+
+motion::Orientation g_orientation;
+motion::RideMetrics g_metrics;
+motion::MountCalibration g_mount;
+
+hal::ImuSource g_imu;
+hal::Store g_store;
+hal::I2cScan g_i2c;
+hal::PowerSource g_power;
+
+ui::ScreenBuffer g_buffer;
+ui::MainScreen g_mainScreen;
+ui::LiveView g_liveView;
+ui::HardwareView g_hardwareView;
+ui::HoldPrompt g_holdPrompt;
+
+/// KEY2 przelacza cyklicznie: wyniki -> diagnostyka -> sprzet -> wyniki.
+enum class ViewMode { Results, Diagnostics, Hardware };
+ViewMode g_view = ViewMode::Results;
+
+ViewMode nextView(ViewMode current) {
+    switch (current) {
+        case ViewMode::Results: return ViewMode::Diagnostics;
+        case ViewMode::Diagnostics: return ViewMode::Hardware;
+        default: return ViewMode::Results;
+    }
+}
+
+/// Progi przycisku pochodza wprost z §22 specyfikacji.
+input::ButtonFsmConfig makeButtonConfig() {
+    input::ButtonFsmConfig config;
+    config.mediumHoldMs = cfg::kButtonResetHoldMs;
+    config.longHoldMs = cfg::kButtonCalibrationHoldMs;
+    return config;
+}
+
+input::ButtonFsm g_button{makeButtonConfig()};
+
+/// Progi maszyny stanow — czasy z §18 i z ustalen o odpornosci na rozruch.
+state::DeviceStateConfig makeStateConfig() {
+    state::DeviceStateConfig config;
+    config.armingDelayMs = cfg::kArmingDelayMs;
+    config.powerLossConfirmMs = cfg::kPowerLossConfirmMs;
+    config.powerReturnConfirmMs = cfg::kPowerReturnConfirmMs;
+    return config;
+}
+
+state::DeviceStateMachine g_deviceState{makeStateConfig()};
+bool g_screenOn = true;
+
+bool g_imuAvailable = false;
+bool g_alarmEnabled = true;
+const char* g_storageStatus = "PAMIEC - BLAD";
+char g_i2cStatus[32] = "I2C - BRAK SKANU";
+
+uint32_t g_lastSampleMicros = 0;
+uint32_t g_lastDisplayMs = 0;
+uint32_t g_lastAutosaveMs = 0;
+
+/// Komunikat pelnoekranowy — potwierdzenia akcji i kalibracja.
+///
+/// Napisy dobieraja font do wlasnej dlugosci, zeby nigdy nie wyjsc poza ekran:
+/// tresci komunikatow zmieniaja sie czesciej niz uklad, wiec dobieranie fontu
+/// recznie i tak by sie rozjechalo.
+void drawMessage(const char* title, const char* detail, uint16_t accent) {
+    m5gfx::LovyanGFX* gfx = g_buffer.gfx();
+    gfx->fillScreen(ui::color::kBackground);
+    gfx->setTextDatum(middle_center);
+
+    const int centerX = ui::layout::kScreenWidth / 2;
+    const int maxWidth = ui::layout::kContentWidth;
+    const bool hasDetail = detail != nullptr && detail[0] != '\0';
+
+    gfx->setTextColor(accent);
+    ui::text::drawFitted(gfx, title, centerX, hasDetail ? 58 : 67, maxWidth);
+
+    if (hasDetail) {
+        // Podpis zawsze najmniejszym fontem — ma uzupelniac tytul, nie z nim
+        // konkurowac. Drobny tekst pasuje do skali tego ekranu.
+        gfx->setFont(&fonts::Font0);
+        gfx->setTextColor(ui::color::kMuted);
+        gfx->drawString(detail, centerX, 92);
+    }
+
+    g_buffer.present();
+}
+
+/// Zapis wynikow wedlug strategii z architektury §6.2: okresowo i tylko gdy
+/// cokolwiek sie zmienilo. `force` pomija odstep czasowy — uzywane przy akcjach
+/// uzytkownika i (docelowo) przy zaniku zasilania.
+void saveResultsIfDirty(bool force) {
+    if (!g_metrics.dirty()) return;
+
+    const uint32_t nowMs = millis();
+    if (!force && nowMs - g_lastAutosaveMs < cfg::kAutosaveIntervalMs) return;
+
+    if (g_store.saveResults(g_metrics.overall(), g_metrics.currentRide())) {
+        g_metrics.clearDirty();
+    }
+    g_lastAutosaveMs = nowMs;
+}
+
+/// §14 — kalibracja orientacji montazu.
+void runMountCalibration() {
+    drawMessage("KALIBRACJA", "NIE RUSZAJ MOTOCYKLA", ui::color::kCalibration);
+
+    motion::Vec3 sum;
+    uint16_t collected = 0;
+    const uint32_t deadline = millis() + 5000;
+
+    while (collected < cfg::kCalibrationSampleCount && millis() < deadline) {
+        motion::ImuSample sample;
+        if (g_imu.read(sample)) {
+            sum += sample.accelG;
+            ++collected;
+        }
+        delay(2);
+    }
+
+    if (collected < cfg::kCalibrationSampleCount / 2) {
+        drawMessage("BLAD", "BRAK DANYCH Z IMU", ui::color::kAlarm);
+        delay(2000);
+        return;
+    }
+
+    const motion::Vec3 average = sum * (1.0f / static_cast<float>(collected));
+    if (g_mount.calibrateFromRest(average, cfg::kMountForwardAxis)) {
+        g_orientation.setMount(g_mount);
+        g_orientation.resetAngles();
+        const bool saved = g_store.saveMount(g_mount);
+        drawMessage("KALIBRACJA OK", saved ? "ZAPISANA" : "BLAD ZAPISU",
+                    saved ? ui::color::kRiding : ui::color::kWaiting);
+    } else {
+        // Najczestsza przyczyna: motocykl sie poruszyl albo stoi na bocznej nozce.
+        drawMessage("KALIBRACJA", "SPROBUJ PONOWNIE", ui::color::kAlarm);
+    }
+    delay(2000);
+}
+
+/// §15 — reset obu zestawow wynikow. Nie dotyka kalibracji ani stanu alarmu.
+void runResultsReset() {
+    g_metrics.resetAll();
+    const bool saved = g_store.saveResults(g_metrics.overall(), g_metrics.currentRide());
+    if (saved) g_metrics.clearDirty();
+
+    drawMessage("POMIARY WYZEROWANE", saved ? "" : "BLAD ZAPISU",
+                saved ? ui::color::kRiding : ui::color::kAlarm);
+    delay(1500);
+}
+
+/// §22.1 — przelaczenie modulu alarmowego.
+void toggleAlarm() {
+    g_alarmEnabled = !g_alarmEnabled;
+    g_store.saveAlarmEnabled(g_alarmEnabled);
+
+    drawMessage(g_alarmEnabled ? "ALARM WLACZONY" : "ALARM WYLACZONY", "",
+                g_alarmEnabled ? ui::color::kAlarm : ui::color::kMuted);
+    delay(1200);
+}
+
+/// Odtworzenie stanu z pamieci nieulotnej.
+///
+/// Rozroznienie wazne dla §6.1 i §17: przy starcie z zasilaniem zewnetrznym
+/// stacyjka wlasnie zostala wlaczona, wiec zaczynamy NOWA SESJE i zerujemy
+/// OSTATNIA JAZDE. Przy starcie na samej baterii (restart po awarii, watchdog)
+/// nie bylo wlaczenia stacyjki — wyniki sesji nalezy odtworzyc, a nie skasowac.
+void restoreState(bool externalPowerAtBoot) {
+    hal::PersistentState state;
+    const hal::LoadResult result = g_store.load(state);
+
+    switch (result) {
+        case hal::LoadResult::Restored: g_storageStatus = "PAMIEC OK"; break;
+        case hal::LoadResult::Fresh: g_storageStatus = "PAMIEC - PIERWSZY START"; break;
+        case hal::LoadResult::Migrated: g_storageStatus = "PAMIEC - NOWY FORMAT"; break;
+        case hal::LoadResult::Failed: g_storageStatus = "PAMIEC - BLAD"; break;
+    }
+
+    g_alarmEnabled = state.alarmEnabled;
+
+    if (state.mountCalibrated) {
+        g_mount.restore(state.mountRotation);
+    }
+    g_orientation.setMount(g_mount);
+
+    if (externalPowerAtBoot) {
+        g_metrics.restore(state.overall, motion::RideValues{});
+    } else {
+        g_metrics.restore(state.overall, state.ride);
+    }
+}
+
+void runSplash() {
+    ui::SplashScreen splash;
+    splash.begin();
+
+    struct Check {
+        const char* text;
+        bool ok;
+    };
+
+    static char imuLine[32];
+    if (g_imuAvailable && g_i2c.imuAddress() != 0) {
+        std::snprintf(imuLine, sizeof(imuLine), "IMU BMI270 OK  0x%02X", g_i2c.imuAddress());
+    } else {
+        std::snprintf(imuLine, sizeof(imuLine), "IMU BMI270 - BRAK");
+    }
+
+    const Check checks[] = {
+        {imuLine, g_imuAvailable},
+        {g_i2cStatus, g_i2c.allCriticalPresent()},
+        {g_storageStatus, g_store.isAvailable()},
+        {g_mount.isCalibrated() ? "KALIBRACJA OK" : "KALIBRACJA - BRAK", true},
+        {cfg::kFirmwareVersion, true},
+    };
+    constexpr int kCheckCount = sizeof(checks) / sizeof(checks[0]);
+
+    const uint32_t start = millis();
+    int shown = -1;
+
+    while (true) {
+        const uint32_t elapsed = millis() - start;
+        if (elapsed >= cfg::kSplashDurationMs) break;
+
+        const int index = static_cast<int>(elapsed * kCheckCount / cfg::kSplashDurationMs);
+        if (index != shown && index < kCheckCount) {
+            shown = index;
+            splash.setStatus(checks[index].text, checks[index].ok);
+        }
+        splash.setProgress(static_cast<float>(elapsed) /
+                           static_cast<float>(cfg::kSplashDurationMs));
+        delay(20);
+    }
+    splash.setProgress(1.0f);
+}
+
+void pumpImu() {
+    motion::ImuSample sample;
+    if (!g_imu.read(sample)) return;
+
+    const uint32_t nowMicros = micros();
+    if (g_lastSampleMicros == 0) {
+        g_lastSampleMicros = nowMicros;
+        return;
+    }
+
+    // dt z mikrosekund, nie z millis: przy 100 Hz kwantyzacja milisekundowa
+    // wnosilaby 10% bledu do calkowania zyroskopu.
+    const float dtSec = static_cast<float>(nowMicros - g_lastSampleMicros) / 1e6f;
+    g_lastSampleMicros = nowMicros;
+
+    g_orientation.update(sample, dtSec);
+
+    // Bez kalibracji montazu uklad odniesienia jest przypadkowy: polozenie
+    // urzadzenia na boku daje wtedy 60 stopni przechylu w obie strony naraz.
+    // Estymator dziala dalej (widac go w diagnostyce), ale rekordow nie zbieramy,
+    // bo zapisalyby sie smieci — i to do MAX OGOLNIE, ktore przezywa restart.
+    if (g_mount.isCalibrated()) {
+        g_metrics.update(g_orientation.state());
+    }
+}
+
+void refreshDisplay() {
+    // Ekran wyboru akcji dopiero po chwili trzymania. Przy krotkim nacisnieciu
+    // mignalby na ulamek sekundy i tylko przeszkadzal — akcja i tak wykonuje sie
+    // od razu po puszczeniu.
+    if (g_button.isPressed() && g_button.heldMs() >= cfg::kHoldPromptDelayMs) {
+        g_holdPrompt.draw(g_buffer, g_button);
+        return;
+    }
+
+    if (g_view == ViewMode::Diagnostics) {
+        ui::LiveViewModel model;
+        model.state = g_orientation.state();
+        model.sampleRateHz = g_imu.sampleRateHz();
+        model.imuOk = g_imuAvailable;
+        model.mountCalibrated = g_mount.isCalibrated();
+        g_liveView.draw(g_buffer, model);
+        return;
+    }
+
+    if (g_view == ViewMode::Hardware) {
+        ui::HardwareViewModel model;
+        model.scan = &g_i2c;
+        model.sampleRateHz = g_imu.sampleRateHz();
+        model.batteryPercent = M5.Power.getBatteryLevel();
+        model.batteryMillivolts = g_power.batteryMillivolts();
+        model.charging = g_power.rawCharging();
+        model.externalPower = g_power.isExternal();
+        model.maxPulseGapMs = g_power.maxPulseGapMs();
+        model.stateName = state::stateName(g_deviceState.state());
+        model.bufferedDisplay = g_buffer.isBuffered();
+        model.freeHeapBytes = ESP.getFreeHeap();
+        model.freePsramBytes = ESP.getFreePsram();
+        g_hardwareView.draw(g_buffer, model);
+        return;
+    }
+
+    ui::MainScreenModel model;
+    model.overall = g_metrics.overall();
+    model.ride = g_metrics.currentRide();
+    model.alarmEnabled = g_alarmEnabled;
+    model.mountCalibrated = g_mount.isCalibrated();
+    model.externalPower = g_power.isExternal();
+    model.batteryPercent = M5.Power.getBatteryLevel();
+    // TODO(GPS): ustawic na true, gdy parser NMEA zaraportuje fix. Do tego czasu
+    // wiersz predkosci pokazuje "---" zamiast mylacego zera.
+    model.speedAvailable = false;
+
+    static char stateLabel[16];
+    const uint32_t untilOff = g_deviceState.msUntilScreenOff(millis());
+
+    if (!g_imuAvailable) {
+        model.stateLabel = "IMU BRAK";
+        model.stateColor = ui::color::kAlarm;
+    } else if (g_deviceState.state() == state::DeviceState::Cooldown) {
+        // Odliczanie do zgaszenia ekranu — uzytkownik widzi, ile czasu zostalo,
+        // zanim urzadzenie samo przejdzie w czuwanie.
+        const uint32_t seconds = (untilOff + 999) / 1000;
+        std::snprintf(stateLabel, sizeof(stateLabel), "%lu:%02lu",
+                      static_cast<unsigned long>(seconds / 60),
+                      static_cast<unsigned long>(seconds % 60));
+        model.stateLabel = stateLabel;
+        model.stateColor = ui::color::kWaiting;
+    } else if (!g_mount.isCalibrated()) {
+        model.stateLabel = "BRAK KAL.";
+        model.stateColor = ui::color::kWaiting;
+    } else {
+        model.stateLabel = state::stateName(g_deviceState.state());
+        model.stateColor = ui::color::kRiding;
+    }
+
+    g_mainScreen.draw(g_buffer, model);
+}
+
+/// Gaszenie i zapalanie ekranu. Podswietlenie zjada wiekszosc pradu, wiec
+/// w czuwaniu musi byc naprawde wylaczone, nie tylko wygaszone na czarno.
+void setScreenOn(bool on) {
+    if (on == g_screenOn) return;
+    g_screenOn = on;
+    if (on) {
+        M5.Display.wakeup();
+        M5.Display.setBrightness(cfg::kDisplayBrightness);
+        g_lastDisplayMs = 0;
+    } else {
+        M5.Display.setBrightness(0);
+        M5.Display.sleep();
+    }
+}
+
+/// Po akcji uzytkownika wracamy do normalnej pracy: pomiar czasu probkowania
+/// i odswiezania musi ruszyc od nowa, inaczej pierwsza probka dostanie
+/// gigantyczne dt z czasu spedzonego na ekranie komunikatu.
+void resumeAfterAction() {
+    g_lastSampleMicros = 0;
+    g_lastDisplayMs = 0;
+}
+
+void handleButtons() {
+    // KEY2 przelacza kolejne widoki.
+    if (M5.BtnB.wasClicked()) {
+        g_view = nextView(g_view);
+        g_lastDisplayMs = 0;
+    }
+
+    switch (g_button.update(M5.BtnA.isPressed(), millis())) {
+        case input::ButtonAction::ShortPress:
+            // Przy dzwoniacym alarmie krotkie klikniecie przede wszystkim go
+            // wycisza — inaczej falszywy alarm da sie uciszyc tylko stacyjka.
+            if (g_deviceState.state() == state::DeviceState::Triggered) {
+                g_deviceState.silence(millis());
+            }
+            toggleAlarm();
+            resumeAfterAction();
+            break;
+        case input::ButtonAction::MediumHold:
+            runResultsReset();
+            resumeAfterAction();
+            break;
+        case input::ButtonAction::LongHold:
+            runMountCalibration();
+            resumeAfterAction();
+            break;
+        case input::ButtonAction::None:
+            break;
+    }
+}
+
+}  // namespace
+
+void setup() {
+    auto config = M5.config();
+    config.internal_imu = true;
+    config.clear_display = true;
+    // Wyjscie 5 V na Grove wlaczymy dopiero razem z modulem GPS — teraz
+    // niepotrzebnie obciazaloby baterie.
+    config.output_power = false;
+    M5.begin(config);
+
+    M5.Display.setRotation(cfg::kDisplayRotation);
+    M5.Display.setBrightness(cfg::kDisplayBrightness);
+
+    Serial.begin(115200);
+
+    g_buffer.begin();
+    g_imuAvailable = g_imu.begin();
+
+    // Skan magistrali przed ekranem startowym — jego wynik trafia na ekran
+    // jako jedna z linii diagnostycznych.
+    g_i2c.run();
+    if (g_i2c.allCriticalPresent()) {
+        std::snprintf(g_i2cStatus, sizeof(g_i2cStatus), "I2C OK - %u UKLADOW",
+                      g_i2c.totalFound());
+    } else {
+        std::snprintf(g_i2cStatus, sizeof(g_i2cStatus), "I2C - BRAK ISTOTNYCH");
+    }
+
+    g_store.begin();
+
+    g_power.begin(millis());
+    g_deviceState.begin(g_power.isExternal(), millis());
+    restoreState(g_power.isExternal());
+
+    runSplash();
+
+    Serial.printf("\n=== %s %s ===\n", cfg::kDeviceName, cfg::kFirmwareVersion);
+    g_i2c.printTo(Serial);
+    Serial.printf("IMU: %s | %s | bufor: %s | alarm: %s\n",
+                  g_imuAvailable ? "OK" : "BRAK", g_storageStatus,
+                  g_buffer.isBuffered() ? "PSRAM" : "bezposredni",
+                  g_alarmEnabled ? "WL" : "WYL");
+    Serial.printf("Bateria: %d%% (%d mV), zasilanie: %s (impuls ladowania: %s)\n",
+                  M5.Power.getBatteryLevel(), g_power.batteryMillivolts(),
+                  g_power.isExternal() ? "ZEWNETRZNE" : "bateria",
+                  g_power.rawCharging() ? "tak" : "nie");
+    Serial.printf("RAM wolne: %u B, PSRAM wolne: %u B\n",
+                  static_cast<unsigned>(ESP.getFreeHeap()),
+                  static_cast<unsigned>(ESP.getFreePsram()));
+}
+
+/// Reakcja na przejscia maszyny stanow (§17, §21, §26).
+void handleStateEvent(state::DeviceEvent event) {
+    switch (event) {
+        case state::DeviceEvent::RideStarted:
+            // Stacyjka wlaczona: nowa sesja, LOTKA od zera, MAX bez zmian.
+            g_metrics.startNewRide();
+            saveResultsIfDirty(true);
+            g_orientation.resetAngles();
+            setScreenOn(true);
+            resumeAfterAction();
+            break;
+
+        case state::DeviceEvent::PowerLost:
+            // Bateria daje nam cale minuty na spokojny zapis — zadnego wyscigu
+            // z zanikajacym napieciem, wiec zapisujemy od razu.
+            saveResultsIfDirty(true);
+            break;
+
+        case state::DeviceEvent::ScreenOff:
+            saveResultsIfDirty(true);
+            setScreenOn(false);
+            break;
+
+        case state::DeviceEvent::MotionDetected:
+        case state::DeviceEvent::AlarmCleared:
+            // TODO(E8): sygnalizacja dzwiekowa i eskalacja (§20).
+            break;
+
+        case state::DeviceEvent::None:
+            break;
+    }
+}
+
+void loop() {
+    M5.update();
+
+    const uint32_t nowMs = millis();
+
+    pumpImu();
+    handleButtons();
+
+    g_power.update(nowMs);
+    // TODO(E8): ostatni argument to wynik detektora ruchu.
+    handleStateEvent(g_deviceState.update(g_power.isExternal(), g_alarmEnabled, false, nowMs));
+
+    saveResultsIfDirty(false);
+
+    // Nacisniecie przycisku budzi ekran niezaleznie od stanu — uzytkownik
+    // musi moc zobaczyc wyniki po powrocie do zaparkowanego motocykla.
+    if (!g_screenOn && (M5.BtnA.wasPressed() || M5.BtnB.wasPressed())) {
+        setScreenOn(true);
+    }
+
+    if (g_screenOn && nowMs - g_lastDisplayMs >= cfg::kDisplayRefreshMs) {
+        g_lastDisplayMs = nowMs;
+        refreshDisplay();
+    }
+
+    // Przy zgaszonym ekranie nie ma po co krecic petla z pelna predkoscia.
+    // Wlasciwy light sleep wchodzi razem z detektorem ruchu w etapie E8.
+    if (!g_screenOn) delay(20);
+}
