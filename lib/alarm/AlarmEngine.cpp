@@ -10,19 +10,20 @@ namespace {
 /// od dt — przy 25-100 Hz daje stala czasowa rzedu ulamka sekundy, co wystarcza.
 constexpr float kFilterAlpha = 0.2f;
 
-/// Czestotliwosci sygnalizacji. Dwa tony na przemian w stopniu trzecim,
-/// bo modulowany dzwiek zwraca uwage mocniej niz jednostajny pisk.
+/// Czestotliwosci sygnalizacji.
 constexpr uint16_t kWarnFreqHz = 2500;
-constexpr uint16_t kSirenLowHz = 2200;
-constexpr uint16_t kSirenHighHz = 2900;
+/// Syrena: plynny przestroj miedzy tymi czestotliwosciami — brzmi jak
+/// klasyczny alarm, nie jak przelaczanie dwoch piskow.
+constexpr uint16_t kSirenLoHz = 1000;
+constexpr uint16_t kSirenHiHz = 3000;
+constexpr uint32_t kSirenSweepMs = 1200;     // pelny cykl gora-dol
 
 /// Czasy wzorcow (§20 zostawia je implementacji).
-constexpr uint32_t kStage1BeepMs = 150;      // 3 krotkie piknieca
-constexpr uint32_t kStage1TotalMs = 900;
-constexpr uint32_t kStage2OnMs = 800;        // 3 dluzsze sygnaly
-constexpr uint32_t kStage2CycleMs = 1100;
-constexpr uint32_t kStage2TotalMs = 3300;
-constexpr uint32_t kSirenWarbleMs = 250;     // przelaczanie tonow w stopniu 3
+constexpr uint32_t kStage1BeepMs = 250;      // 5 piknięc
+constexpr uint32_t kStage1TotalMs = 2250;
+constexpr uint32_t kStage2OnMs = 1000;       // 3 dlugie sygnaly
+constexpr uint32_t kStage2CycleMs = 1300;
+constexpr uint32_t kStage2TotalMs = 3900;
 
 }  // namespace
 
@@ -125,7 +126,7 @@ void AlarmEngine::renderPattern(AlarmOutput& out, uint32_t nowMs) {
 
     switch (signalStage_) {
         case 1:
-            // Trzy krotkie piknieca: gra w co drugim oknie 150 ms.
+            // Piec pikniec: gra w co drugim oknie 250 ms.
             if (t >= kStage1TotalMs) break;
             out.signalling = true;
             out.sirenOn = (t / kStage1BeepMs) % 2 == 0;
@@ -140,14 +141,21 @@ void AlarmEngine::renderPattern(AlarmOutput& out, uint32_t nowMs) {
             out.freqHz = kWarnFreqHz;
             return;
 
-        default:
-            // Stopien 3+: sygnal ciagly z twardym limitem czasu — potem
-            // powrot do czuwania, zeby nie rozladowac baterii (§4.3 architektury).
-            if (t >= config_.sirenCapMs) break;
+        default: {
+            // Stopien 3+: syrena modulowana BEZ limitu czasu. Trojkatny
+            // przestroj czestotliwosci, kwantowany do 50 Hz, zeby nie
+            // restartowac generatora tonu w kazdej iteracji petli.
             out.signalling = true;
             out.sirenOn = true;
-            out.freqHz = (t / kSirenWarbleMs) % 2 == 0 ? kSirenLowHz : kSirenHighHz;
+            const uint32_t phase = t % kSirenSweepMs;
+            const uint32_t half = kSirenSweepMs / 2;
+            const uint32_t position = phase < half ? phase : kSirenSweepMs - phase;
+            const float fraction = static_cast<float>(position) / static_cast<float>(half);
+            const uint16_t swept = static_cast<uint16_t>(
+                kSirenLoHz + static_cast<float>(kSirenHiHz - kSirenLoHz) * fraction);
+            out.freqHz = static_cast<uint16_t>((swept / 50) * 50);
             return;
+        }
     }
 
     // Wzorzec dobiegl konca.

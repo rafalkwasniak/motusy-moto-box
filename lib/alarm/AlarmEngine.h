@@ -17,12 +17,14 @@
 // z momentu uzbrojenia, nie uklad motocykla.
 //
 // ESKALACJA (§20). Trzy stopnie:
-//   1. pierwsze naruszenie      -> krotkie piknieca ostrzegawcze
+//   1. pierwsze naruszenie      -> piknieca ostrzegawcze
 //   2. kolejne naruszenie       -> dluzsze sygnaly
-//   3. trzecie i dalsze         -> sygnal ciagly z twardym limitem czasu
-// Limit czasu jest krytyczny: wzmacniacz 1 W przy ciaglym dzwieku ciagnie
-// setki mA — alarm, ktory rozladuje baterie, przestaje pilnowac motocykla.
-// Po cichej minucie poziom eskalacji opada o stopien.
+//   3. trzecie i dalsze         -> syrena modulowana (plynny przestroj)
+//                                  BEZ limitu czasu — wyje az do wyciszenia,
+//                                  stacyjki albo rozladowania baterii.
+//                                  Decyzja uzytkownika z 2026-08-28: alarm ma
+//                                  ostrzegac, gdy ktos odchodzi z motocyklem.
+// Po cichej minucie poziom eskalacji opada o stopien (dotyczy stopni 1-2).
 
 #pragma once
 
@@ -44,10 +46,7 @@ struct AlarmConfig {
     uint32_t retriggerGapMs = 2000;
     /// Po jakim czasie ciszy poziom eskalacji opada o stopien [ms].
     uint32_t decayMs = 60000;
-    /// Twardy limit ciaglej sygnalizacji trzeciego stopnia [ms].
-    uint32_t sirenCapMs = 30000;
-    /// Najwyzszy dozwolony stopien — przy slabej baterii warstwa aplikacji
-    /// moze go obnizyc, zeby zachowac zdolnosc czuwania.
+    /// Najwyzszy dozwolony stopien (strukturalny sufit eskalacji).
     uint8_t maxStage = 3;
 };
 

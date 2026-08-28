@@ -23,7 +23,6 @@ AlarmConfig testConfig() {
     config.sustainMs = 250;
     config.retriggerGapMs = 2000;
     config.decayMs = 60000;
-    config.sirenCapMs = 30000;
     return config;
 }
 
@@ -116,10 +115,10 @@ void test_escalation_reaches_continuous_siren() {
     TEST_ASSERT_EQUAL(3, engine.violationCount());
 }
 
-void test_continuous_siren_respects_hard_cap() {
-    AlarmConfig config = testConfig();
-    config.sirenCapMs = 5000;  // krotszy limit, zeby test byl szybki
-    AlarmEngine engine{config};
+/// Decyzja z 2026-08-28: syrena wyje az do rozbrojenia — takze wtedy, gdy
+/// zlodziej odszedl z motocyklem i ruch ustal.
+void test_siren_wails_until_disarmed() {
+    AlarmEngine engine{testConfig()};
     uint32_t now = 1000;
     engine.arm(Vec3{0.0f, 0.0f, 1.0f}, now);
 
@@ -128,18 +127,23 @@ void test_continuous_siren_respects_hard_cap() {
         run(engine, still(), now, 3000);
     }
 
-    // Trzecie naruszenie wystartowalo syrene. Po limicie musi umilknac,
-    // nawet jesli ruch trwa nadal.
-    uint32_t sirenMs = 0;
+    // Pelne pięc minut ciszy — syrena ma grac dalej, z modulowana
+    // czestotliwoscia w zakresie przestroju.
     const ImuSample quiet = still();
-    for (uint32_t t = 0; t < 20000; t += kStepMs) {
+    uint16_t minFreq = 65535;
+    uint16_t maxFreq = 0;
+    for (uint32_t t = 0; t < 300000; t += kStepMs) {
         const AlarmOutput out = engine.update(&quiet, now);
-        if (out.sirenOn) sirenMs += kStepMs;
+        TEST_ASSERT_TRUE_MESSAGE(out.sirenOn, "Syrena umilkla bez rozbrojenia");
+        if (out.freqHz < minFreq) minFreq = out.freqHz;
+        if (out.freqHz > maxFreq) maxFreq = out.freqHz;
         now += kStepMs;
     }
+    TEST_ASSERT_TRUE_MESSAGE(maxFreq - minFreq > 1000,
+                             "Syrena nie jest modulowana");
 
-    TEST_ASSERT_TRUE_MESSAGE(sirenMs <= config.sirenCapMs + 100,
-                             "Syrena gra dluzej niz twardy limit");
+    engine.disarm();
+    TEST_ASSERT_FALSE(engine.update(&quiet, now).sirenOn);
 }
 
 void test_quiet_period_decays_escalation() {
@@ -211,7 +215,7 @@ int main(int, char**) {
     RUN_TEST(test_brief_jolt_is_ignored);
     RUN_TEST(test_sustained_tilt_triggers_stage1);
     RUN_TEST(test_escalation_reaches_continuous_siren);
-    RUN_TEST(test_continuous_siren_respects_hard_cap);
+    RUN_TEST(test_siren_wails_until_disarmed);
     RUN_TEST(test_quiet_period_decays_escalation);
     RUN_TEST(test_disarm_silences_immediately);
     RUN_TEST(test_stage_limit_for_low_battery);

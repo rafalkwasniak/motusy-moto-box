@@ -29,11 +29,23 @@ constexpr uint32_t kSplashDurationMs = 5000;
 /// Specyfikacja mowila o 3 minutach; skrocone do 2 na zyczenie (2026-08-28).
 constexpr uint32_t kArmingDelayMs = 2UL * 60UL * 1000UL;
 
-// Potwierdzanie zmiany stanu zasilania. Niesymetryczne: zanik potwierdzamy
-// dluzej, bo rozruch silnika zapada napiecie na ulamek sekundy, a falszywy
-// zanik uzbroilby alarm w trakcie jazdy.
-constexpr uint32_t kPowerLossConfirmMs = 5000;
+// Detekcja zasilania. Okno "tetna" ladowania w PowerSource filtruje zarowno
+// migotanie isCharging() przy pelnej baterii, jak i zapady rozruchu — wiec
+// potwierdzenie w maszynie stanow moze byc krotkie. Odliczanie jest
+// antydatowane o sume obu czasow, przez co ekran gasnie rowno kArmingDelayMs
+// po FAKTYCZNYM odlaczeniu zasilania.
+// Okno 15 s to wartosc ostrozna — po odczycie "luki" z ekranu SPRZET mozna
+// je zejsc do ~10 s (prog musi byc wyraznie wiekszy od zmierzonej luki).
+constexpr uint32_t kChargePulseHoldMs = 15000;
+constexpr uint32_t kPowerLossConfirmMs = 2000;
 constexpr uint32_t kPowerReturnConfirmMs = 1500;
+
+// Ekran obudzony na baterii gasnie sam — kazde zgasniecie ekranu przy
+// wlaczonym module konczy sie ponownym uzbrojeniem alarmu.
+constexpr uint32_t kWakeScreenMs = 30000;
+/// Krotsze okno po wyciszeniu alarmu: czas na ewentualny drugi klik
+/// (wylaczenie modulu), potem powrot do czuwania.
+constexpr uint32_t kSilenceScreenMs = 15000;
 
 /// Po jakim czasie trzymania pokazac ekran wyboru akcji przycisku.
 /// Krotkie klikniecie ma od razu dac efekt — bez migniecia "PRZELACZ ALARM",
@@ -53,9 +65,6 @@ constexpr uint32_t kButtonCalibrationHoldMs = 4000;
 // ── Alarm i dzwiek ─────────────────────────────────────────────────────────
 /// Glosnosc sygnalizacji 0-255. Wbudowany glosnik 1 W jest zaskakujaco donosny.
 constexpr uint8_t kSpeakerVolume = 255;
-/// Ponizej tego poziomu baterii alarm ogranicza sie do krotkich sygnalow
-/// (stopien 1), zeby zachowac zdolnosc czuwania.
-constexpr int kLowBatteryPercent = 20;
 /// Odstep miedzy probkami IMU w czuwaniu — light sleep miedzy nimi [ms].
 constexpr uint32_t kArmedSampleIntervalMs = 40;
 

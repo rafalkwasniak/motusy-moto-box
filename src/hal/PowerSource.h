@@ -23,7 +23,8 @@ struct PowerSourceConfig {
     /// Jak dlugo po ostatnim impulsie ladowania uznajemy zasilanie za obecne.
     /// Musi byc wyraznie dluzsze niz najdluzsza przerwa miedzy impulsami przy
     /// pelnej baterii — patrz `maxPulseGapMs()`, ktore te przerwe mierzy.
-    uint32_t chargePulseHoldMs = 25000;
+    /// Wartosc produkcyjna pochodzi z cfg::kChargePulseHoldMs.
+    uint32_t chargePulseHoldMs = 15000;
 };
 
 class PowerSource {

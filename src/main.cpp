@@ -43,7 +43,14 @@ motion::MountCalibration g_mount;
 hal::ImuSource g_imu;
 hal::Store g_store;
 hal::I2cScan g_i2c;
-hal::PowerSource g_power;
+
+hal::PowerSourceConfig makePowerConfig() {
+    hal::PowerSourceConfig config;
+    config.chargePulseHoldMs = cfg::kChargePulseHoldMs;
+    return config;
+}
+
+hal::PowerSource g_power{makePowerConfig()};
 
 ui::ScreenBuffer g_buffer;
 ui::MainScreen g_mainScreen;
@@ -79,6 +86,8 @@ state::DeviceStateConfig makeStateConfig() {
     config.armingDelayMs = cfg::kArmingDelayMs;
     config.powerLossConfirmMs = cfg::kPowerLossConfirmMs;
     config.powerReturnConfirmMs = cfg::kPowerReturnConfirmMs;
+    // Antydatowanie: pelen lancuch detekcji zaniku to okno tetna + potwierdzenie.
+    config.detectionLatencyMs = cfg::kChargePulseHoldMs + cfg::kPowerLossConfirmMs;
     return config;
 }
 
@@ -88,8 +97,13 @@ bool g_screenOn = true;
 guard::AlarmEngine g_alarm;
 motion::ImuSample g_lastSample;
 bool g_haveNewSample = false;
+bool g_haveSampleEver = false;
 bool g_sirenPlaying = false;
 uint16_t g_sirenFreqHz = 0;
+/// Tor audio (wzmacniacz) wlaczony na czas sygnalizacji.
+bool g_audioActive = false;
+/// Klik, ktory obudzil zgaszony ekran, nie wykonuje swojej normalnej funkcji.
+bool g_swallowClick = false;
 
 bool g_imuAvailable = false;
 bool g_alarmEnabled = true;
@@ -293,6 +307,7 @@ void pumpImu() {
 
     g_lastSample = sample;
     g_haveNewSample = true;
+    g_haveSampleEver = true;
 
     g_orientation.update(sample, dtSec);
 
@@ -380,7 +395,16 @@ void refreshDisplay() {
 
 /// Sterowanie glosnikiem wedlug decyzji silnika alarmu. Ton gra do odwolania,
 /// wiec wolamy tone() tylko przy zmianie — nie w kazdej iteracji petli.
+///
+/// Caly tor audio (wzmacniacz) zyje tylko na czas sygnalizacji: zostawiony
+/// wlaczony trzeszczal w czuwaniu, bo light sleep przerywal mu strumien I2S.
 void driveSiren(const guard::AlarmOutput& out) {
+    if (out.signalling && !g_audioActive) {
+        M5.Speaker.begin();
+        M5.Speaker.setVolume(cfg::kSpeakerVolume);
+        g_audioActive = true;
+    }
+
     if (out.sirenOn) {
         if (!g_sirenPlaying || out.freqHz != g_sirenFreqHz) {
             M5.Speaker.tone(out.freqHz);
@@ -389,6 +413,13 @@ void driveSiren(const guard::AlarmOutput& out) {
         }
     } else if (g_sirenPlaying) {
         M5.Speaker.stop();
+        g_sirenPlaying = false;
+    }
+
+    if (!out.signalling && g_audioActive) {
+        M5.Speaker.stop();
+        M5.Speaker.end();
+        g_audioActive = false;
         g_sirenPlaying = false;
     }
 }
@@ -416,24 +447,61 @@ void resumeAfterAction() {
     g_lastDisplayMs = 0;
 }
 
+/// Obudzenie zgaszonego ekranu na baterii. Czuwanie jest zawieszone (silnik
+/// rozbrojony), a maszyna stanow dostaje krotkie odliczanie — po jego uplywie
+/// ekran zgasnie normalna droga i alarm uzbroi sie od nowa.
+void wakeScreenOnBattery(uint32_t screenOnMs) {
+    g_alarm.disarm();
+    driveSiren(guard::AlarmOutput{});
+    g_deviceState.wake(millis(), screenOnMs);
+    setScreenOn(true);
+    resumeAfterAction();
+}
+
+/// Klik 1 przy dzwoniacym alarmie: TYLKO wycisza. Modul zostaje wlaczony,
+/// po krotkim oknie czuwanie wraca w aktualnej pozycji. Wylaczenie modulu
+/// na dobre wymaga drugiego kliku w tym oknie — chroni przed nieswiadomym
+/// zostawieniem motocykla bez ochrony po falszywym alarmie.
+void silenceAlarm() {
+    g_alarm.disarm();
+    driveSiren(guard::AlarmOutput{});
+    g_deviceState.wake(millis(), cfg::kSilenceScreenMs);
+    setScreenOn(true);
+    drawMessage("WYCISZONO", "ALARM CZUWA DALEJ", ui::color::kWaiting);
+    delay(1500);
+    resumeAfterAction();
+}
+
 void handleButtons() {
+    // Dowolny przycisk budzi zgaszony ekran — i zostaje "polkniety",
+    // czyli nie wykonuje swojej normalnej funkcji.
+    if (!g_screenOn && (M5.BtnA.wasPressed() || M5.BtnB.wasPressed())) {
+        wakeScreenOnBattery(cfg::kWakeScreenMs);
+        g_swallowClick = true;
+    }
+
     // KEY2 przelacza kolejne widoki.
     if (M5.BtnB.wasClicked()) {
-        g_view = nextView(g_view);
-        g_lastDisplayMs = 0;
+        if (g_swallowClick) {
+            g_swallowClick = false;
+        } else {
+            g_view = nextView(g_view);
+            g_lastDisplayMs = 0;
+        }
     }
 
     switch (g_button.update(M5.BtnA.isPressed(), millis())) {
         case input::ButtonAction::ShortPress:
-            // Przy dzwoniacym alarmie krotkie klikniecie przede wszystkim go
-            // wycisza — inaczej falszywy alarm da sie uciszyc tylko stacyjka.
-            if (g_deviceState.state() == state::DeviceState::Triggered) {
-                g_deviceState.silence(millis());
-                g_alarm.disarm();
-                driveSiren(guard::AlarmOutput{});
+            if (g_swallowClick) {
+                g_swallowClick = false;
+                break;
             }
-            toggleAlarm();
-            resumeAfterAction();
+            if (g_deviceState.state() == state::DeviceState::Triggered) {
+                silenceAlarm();
+            } else {
+                toggleAlarm();
+                resumeAfterAction();
+            }
             break;
         case input::ButtonAction::MediumHold:
             runResultsReset();
@@ -523,17 +591,15 @@ void handleStateEvent(state::DeviceEvent event) {
             break;
 
         case state::DeviceEvent::ScreenOff:
+            // REGULA NACZELNA scenariusza: ekran zgaszony na baterii + modul
+            // wlaczony => silnik uzbrojony. Kazda droga do zgaszonego ekranu
+            // przechodzi tedy: koniec odliczania, timeout po obudzeniu,
+            // okno po wyciszeniu, wlaczenie modulu przyciskiem.
             saveResultsIfDirty(true);
             setScreenOn(false);
-            if (g_alarmEnabled && g_haveNewSample) {
+            if (g_alarmEnabled && g_haveSampleEver) {
                 // Pozycja odniesienia = pozycja w momencie uzbrojenia, wiec
                 // motocykl na bocznej stopce nie wywola wlasnego alarmu.
-                // Przy slabej baterii ograniczamy eskalacje do krotkich
-                // sygnalow — czuwanie jest wazniejsze niz glosnosc.
-                guard::AlarmConfig alarmConfig = g_alarm.config();
-                alarmConfig.maxStage =
-                    M5.Power.getBatteryLevel() <= cfg::kLowBatteryPercent ? 1 : 3;
-                g_alarm.setConfig(alarmConfig);
                 g_alarm.arm(g_lastSample.accelG, millis());
             }
             break;
@@ -584,12 +650,6 @@ void loop() {
 
     saveResultsIfDirty(false);
 
-    // Nacisniecie przycisku budzi ekran niezaleznie od stanu — uzytkownik
-    // musi moc zobaczyc wyniki po powrocie do zaparkowanego motocykla.
-    if (!g_screenOn && (M5.BtnA.wasPressed() || M5.BtnB.wasPressed())) {
-        setScreenOn(true);
-    }
-
     if (g_screenOn && nowMs - g_lastDisplayMs >= cfg::kDisplayRefreshMs) {
         g_lastDisplayMs = nowMs;
         refreshDisplay();
@@ -598,7 +658,7 @@ void loop() {
     // Light sleep miedzy probkami IMU (~25 Hz czuwania). Ten stan istnieje
     // wylacznie na baterii, wiec utrata USB nie jest problemem. Przyciski
     // (GPIO 11/12, aktywne w stanie niskim) budza natychmiast.
-    if (!g_screenOn && g_deviceState.maySleep() && !g_sirenPlaying) {
+    if (!g_screenOn && g_deviceState.maySleep() && !g_audioActive) {
         gpio_wakeup_enable(GPIO_NUM_11, GPIO_INTR_LOW_LEVEL);
         gpio_wakeup_enable(GPIO_NUM_12, GPIO_INTR_LOW_LEVEL);
         esp_sleep_enable_gpio_wakeup();

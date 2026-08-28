@@ -141,7 +141,9 @@ void test_motion_triggers_only_when_armed() {
     TEST_ASSERT_EQUAL(DeviceState::Triggered, fsm.state());
 }
 
-void test_silence_returns_to_idle() {
+/// Wyciszenie przyciskiem: krotki Cooldown z ekranem, potem ponowne
+/// uzbrojenie ta sama droga co zwykle zgasniecie ekranu.
+void test_wake_gives_short_cooldown_then_rearms() {
     DeviceStateMachine fsm{testConfig()};
     uint32_t now = 1000;
     fsm.begin(true, now);
@@ -150,8 +152,28 @@ void test_silence_returns_to_idle() {
     fsm.update(false, true, true, now);
     TEST_ASSERT_EQUAL(DeviceState::Triggered, fsm.state());
 
-    fsm.silence(now);
-    TEST_ASSERT_EQUAL(DeviceState::Idle, fsm.state());
+    fsm.wake(now, 15000);
+    TEST_ASSERT_EQUAL(DeviceState::Cooldown, fsm.state());
+    TEST_ASSERT_TRUE(fsm.msUntilScreenOff(now) <= 15000);
+
+    TEST_ASSERT_EQUAL(DeviceEvent::ScreenOff, advance(fsm, false, true, now, 20000));
+    TEST_ASSERT_EQUAL_MESSAGE(DeviceState::Armed, fsm.state(),
+                              "Po wyciszeniu alarm ma czuwac dalej");
+}
+
+/// Antydatowanie: odliczanie liczy sie od faktycznego odlaczenia, nie od
+/// chwili potwierdzenia — laczny czas do zgasniecia ekranu jest staly.
+void test_power_loss_countdown_is_backdated() {
+    DeviceStateConfig config = testConfig();
+    config.detectionLatencyMs = 17000;
+    DeviceStateMachine fsm{config};
+    uint32_t now = 1000;
+    fsm.begin(true, now);
+
+    advance(fsm, false, true, now, 6000);
+    TEST_ASSERT_EQUAL(DeviceState::Cooldown, fsm.state());
+    TEST_ASSERT_TRUE_MESSAGE(fsm.msUntilScreenOff(now) <= kArmingMs - 17000,
+                             "Odliczanie nie zostalo antydatowane");
 }
 
 void test_rearm_returns_from_triggered_to_armed() {
@@ -191,7 +213,8 @@ int main(int, char**) {
     RUN_TEST(test_power_return_starts_new_ride_from_any_state);
     RUN_TEST(test_alarm_never_arms_while_powered);
     RUN_TEST(test_motion_triggers_only_when_armed);
-    RUN_TEST(test_silence_returns_to_idle);
+    RUN_TEST(test_wake_gives_short_cooldown_then_rearms);
+    RUN_TEST(test_power_loss_countdown_is_backdated);
     RUN_TEST(test_rearm_returns_from_triggered_to_armed);
     RUN_TEST(test_countdown_reports_remaining_time);
     return UNITY_END();

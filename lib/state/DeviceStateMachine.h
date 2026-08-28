@@ -78,6 +78,12 @@ struct DeviceStateConfig {
 
     /// Jak dlugo zasilanie musi byc obecne, zanim uznamy wlaczenie stacyjki.
     uint32_t powerReturnConfirmMs = 1500;
+
+    /// Opoznienie calego lancucha detekcji zaniku (okno tetna ladowania
+    /// w PowerSource + powerLossConfirmMs). Odliczanie jest antydatowane
+    /// o te wartosc, wiec ekran gasnie rowno armingDelayMs po FAKTYCZNYM
+    /// odlaczeniu zasilania, a nie po jego wykryciu.
+    uint32_t detectionLatencyMs = 0;
 };
 
 class DeviceStateMachine {
@@ -110,8 +116,11 @@ public:
         return state_ == DeviceState::Idle || state_ == DeviceState::Armed;
     }
 
-    /// Wycisza trwajaca sygnalizacje i wraca do czuwania — reakcja na przycisk.
-    void silence(uint32_t nowMs);
+    /// Obudzenie ekranu na baterii: przejscie do Cooldown ze skroconym
+    /// odliczaniem `screenOnMs`. Po jego uplywie normalna droga (ScreenOff)
+    /// gasi ekran i uzbraja alarm od nowa — jedna wspolna regula dla
+    /// wyciszenia przyciskiem, podgladu wynikow i wlaczenia modulu.
+    void wake(uint32_t nowMs, uint32_t screenOnMs);
 
     /// Automatyczny powrot z Triggered do Armed po zakonczeniu sygnalizacji —
     /// alarm ma pilnowac dalej, nie zostac na zawsze w stanie "RUCH!".

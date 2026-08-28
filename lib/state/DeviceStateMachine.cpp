@@ -43,7 +43,9 @@ DeviceEvent DeviceStateMachine::update(bool externalPower, bool alarmEnabled,
 
     if (!power && hadPower) {
         state_ = DeviceState::Cooldown;
-        powerLostAtMs_ = nowMs;
+        // Antydatowanie o czas detekcji — arytmetyka bez znaku jest odporna
+        // na pozorne "ujemne" wyniki tuz po starcie urzadzenia.
+        powerLostAtMs_ = nowMs - config_.detectionLatencyMs;
         return DeviceEvent::PowerLost;
     }
 
@@ -92,10 +94,14 @@ uint32_t DeviceStateMachine::msUntilScreenOff(uint32_t nowMs) const {
     return config_.armingDelayMs - elapsed;
 }
 
-void DeviceStateMachine::silence(uint32_t nowMs) {
-    if (state_ != DeviceState::Triggered) return;
-    state_ = DeviceState::Idle;
-    powerLostAtMs_ = nowMs;
+void DeviceStateMachine::wake(uint32_t nowMs, uint32_t screenOnMs) {
+    if (state_ != DeviceState::Idle && state_ != DeviceState::Armed &&
+        state_ != DeviceState::Triggered) {
+        return;
+    }
+    if (screenOnMs > config_.armingDelayMs) screenOnMs = config_.armingDelayMs;
+    state_ = DeviceState::Cooldown;
+    powerLostAtMs_ = nowMs - (config_.armingDelayMs - screenOnMs);
 }
 
 void DeviceStateMachine::rearm() {
