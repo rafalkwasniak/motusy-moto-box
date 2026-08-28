@@ -68,9 +68,22 @@ ui::LiveView g_liveView;
 ui::HardwareView g_hardwareView;
 ui::HoldPrompt g_holdPrompt;
 
-/// KEY2 klik: wyniki -> strony historii (po 2 przejazdy) -> wyniki.
-/// KEY2 przytrzymanie: widoki serwisowe (diagnostyka/sprzet) — potrzebne przy
-/// montazu i strojeniu, ale ukryte przed codziennym klikaniem.
+// ── Role przyciskow ────────────────────────────────────────────────────────
+// KEY1 jest wygodniejszy w dosiegu, wiec obsluguje czynnosc najczestsza:
+// ogladanie wynikow i archiwum. KEY2 to przycisk akcji — rzadszych, ale
+// waznych i celowo wymagajacych swiadomego przytrzymania.
+//
+//   KEY1 (widok)  klik: wyniki -> strony archiwum -> wyniki
+//                 hold: widoki serwisowe (diagnostyka/sprzet)
+//   KEY2 (akcja)  klik: przelaczenie alarmu
+//                 2 s:  reset wynikow
+//                 4 s:  kalibracja montazu
+//
+// Zmiana przypisania to podmiana tych dwoch funkcji.
+m5::Button_Class& viewButton() { return M5.BtnA; }
+m5::Button_Class& actionButton() { return M5.BtnB; }
+
+/// Widok wynikow -> strony historii (po 2 przejazdy) -> wyniki.
 enum class ViewMode { Results, History, Diagnostics, Hardware };
 ViewMode g_view = ViewMode::Results;
 /// Biezaca strona historii, 0 = dwa najnowsze przejazdy.
@@ -129,8 +142,11 @@ bool g_sirenPlaying = false;
 uint16_t g_sirenFreqHz = 0;
 /// Tor audio (wzmacniacz) wlaczony na czas sygnalizacji.
 bool g_audioActive = false;
-/// Klik, ktory obudzil zgaszony ekran, nie wykonuje swojej normalnej funkcji.
-bool g_swallowClick = false;
+/// Klik, ktory obudzil ekran albo wyciszyl alarm, nie wykonuje swojej
+/// normalnej funkcji. Osobno dla kazdego przycisku, zeby nacisniecie jednego
+/// nie polykalo klikniecia drugiego.
+bool g_swallowView = false;
+bool g_swallowAction = false;
 
 bool g_imuAvailable = false;
 bool g_alarmEnabled = true;
@@ -570,17 +586,25 @@ void silenceAlarm() {
 }
 
 void handleButtons() {
-    // Dowolny przycisk budzi zgaszony ekran — i zostaje "polkniety",
-    // czyli nie wykonuje swojej normalnej funkcji.
-    if (!g_screenOn && (M5.BtnA.wasPressed() || M5.BtnB.wasPressed())) {
+    const bool anyPressed = viewButton().wasPressed() || actionButton().wasPressed();
+
+    if (g_deviceState.state() == state::DeviceState::Triggered && anyPressed) {
+        // Gdy alarm wyje, wycisza go DOWOLNY przycisk — w takiej chwili nikt
+        // nie zastanawia sie, ktory jest ktory.
+        silenceAlarm();
+        g_swallowView = true;
+        g_swallowAction = true;
+    } else if (!g_screenOn && anyPressed) {
+        // Przycisk budzacy zgaszony ekran tylko budzi.
         wakeScreenOnBattery(cfg::kWakeScreenMs);
-        g_swallowClick = true;
+        g_swallowView = true;
+        g_swallowAction = true;
     }
 
-    // KEY2 przytrzymanie: wejscie/wyjscie z widokow serwisowych.
-    if (M5.BtnB.wasHold()) {
-        if (g_swallowClick) {
-            g_swallowClick = false;
+    // ── KEY1: widoki ──────────────────────────────────────────────────────
+    if (viewButton().wasHold()) {
+        if (g_swallowView) {
+            g_swallowView = false;
         } else {
             g_view = (g_view == ViewMode::Diagnostics || g_view == ViewMode::Hardware)
                          ? ViewMode::Results
@@ -589,10 +613,9 @@ void handleButtons() {
         }
     }
 
-    // KEY2 klik: kartkowanie historii; w trybie serwisowym — zmiana widoku.
-    if (M5.BtnB.wasClicked()) {
-        if (g_swallowClick) {
-            g_swallowClick = false;
+    if (viewButton().wasClicked()) {
+        if (g_swallowView) {
+            g_swallowView = false;
         } else {
             switch (g_view) {
                 case ViewMode::Results:
@@ -614,18 +637,15 @@ void handleButtons() {
         }
     }
 
-    switch (g_button.update(M5.BtnA.isPressed(), millis())) {
+    // ── KEY2: akcje z progami czasowymi (§22, §23) ────────────────────────
+    switch (g_button.update(actionButton().isPressed(), millis())) {
         case input::ButtonAction::ShortPress:
-            if (g_swallowClick) {
-                g_swallowClick = false;
+            if (g_swallowAction) {
+                g_swallowAction = false;
                 break;
             }
-            if (g_deviceState.state() == state::DeviceState::Triggered) {
-                silenceAlarm();
-            } else {
-                toggleAlarm();
-                resumeAfterAction();
-            }
+            toggleAlarm();
+            resumeAfterAction();
             break;
         case input::ButtonAction::MediumHold:
             runResultsReset();

@@ -54,9 +54,25 @@ złodziej odchodzący z motocyklem ma słyszeć syrenę.
 - Po **każdej** sygnalizacji tor audio jest wyłączany → koniec trzeszczenia
   z głośnika w czuwaniu.
 
-## 3. Przycisk — pełny scenariusz
+## 3. Przyciski — podział ról
 
-| Sytuacja | Krótki klik robi |
+Zamienione 2026-08-28: najczęstsza czynność (oglądanie wyników) trafiła na
+wygodniejszy w dosięgu KEY1, a rzadkie akcje — na KEY2.
+
+| Przycisk | Akcja |
+|---|---|
+| **KEY1** klik | wyniki → strony archiwum → wyniki |
+| **KEY1** hold | widoki serwisowe (diagnostyka / sprzęt) |
+| **KEY2** klik | przełączenie modułu alarmu |
+| **KEY2** 2 s | reset wyników |
+| **KEY2** 4 s | kalibracja montażu |
+
+Gdy alarm wyje, wycisza go **dowolny** przycisk — w takiej chwili nikt nie
+zastanawia się, który jest który.
+
+## 3a. Przycisk akcji — pełny scenariusz
+
+| Sytuacja | Krótki klik KEY2 robi |
 |---|---|
 | Alarm **wyje/pika** | **tylko wycisza.** Moduł zostaje WŁĄCZONY. Ekran pokazuje `WYCISZONO — CZUWA DALEJ`, po 15 s gaśnie i uzbraja się od nowa w aktualnej pozycji |
 | Okno 15 s po wyciszeniu | przełącza moduł (można wyłączyć alarm na dobre: klik nr 2) |

@@ -1,4 +1,4 @@
-// Motusy Moto Box — ekran sprzetowy (trzeci widok pod KEY2).
+// Motusy Moto Box — ekran sprzetowy (widok serwisowy pod KEY1 hold).
 //
 // Pokazuje, co faktycznie odpowiada na magistrali I2C oraz stan zasilania
 // i pamieci. Nie jest czescia specyfikacji funkcjonalnej — powstal jako

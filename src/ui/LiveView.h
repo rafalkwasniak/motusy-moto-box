@@ -1,4 +1,4 @@
-// Motusy Moto Box — widok diagnostyczny (przycisk KEY2).
+// Motusy Moto Box — widok diagnostyczny (widok serwisowy pod KEY1 hold).
 //
 // Nie jest czescia specyfikacji funkcjonalnej. Powstal, bo bez niego nie da sie
 // sprawdzic na biurku, czy filtr dziala: pokazuje surowy stan estymatora,
