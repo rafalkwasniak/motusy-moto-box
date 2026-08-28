@@ -2,10 +2,25 @@
 
 #include <cstdio>
 
-#include "Text.h"
 #include "Theme.h"
 
 namespace ui {
+namespace {
+
+/// Wszystkie trzy stany rysuja sie identycznym ukladem i identycznymi
+/// czcionkami — rozni je tylko tresc i kolor akcentu. Rozmiar tytulu jest
+/// dobrany raz, pod najdluzsza z etykiet, zeby "KALIBRACJA" nie wychodzila
+/// wieksza niz "PRZELACZ ALARM".
+const lgfx::IFont* titleFont(m5gfx::LovyanGFX* gfx) {
+    gfx->setFont(&fonts::FreeSansBold12pt7b);
+    if (gfx->textWidth(input::actionLabel(input::ButtonAction::ShortPress)) <=
+        layout::kContentWidth) {
+        return &fonts::FreeSansBold12pt7b;
+    }
+    return &fonts::FreeSansBold9pt7b;
+}
+
+}  // namespace
 
 uint16_t HoldPrompt::accentFor(input::ButtonAction action) {
     switch (action) {
@@ -24,19 +39,23 @@ void HoldPrompt::draw(ScreenBuffer& buffer, const input::ButtonFsm& fsm) {
     const input::ButtonAction pending = fsm.pendingAction();
     const input::ButtonAction next = fsm.nextAction();
     const uint16_t accent = accentFor(pending);
+    const int centerX = layout::kScreenWidth / 2;
 
+    // Linia 1: podpowiedz — zawsze maly font.
     gfx->setFont(&fonts::Font0);
     gfx->setTextDatum(middle_center);
     gfx->setTextColor(color::kMuted);
     gfx->drawString(pending == input::ButtonAction::None ? "TRZYMAJ PRZYCISK" : "PUSC ABY WYKONAC",
-                    layout::kScreenWidth / 2, kHintY);
+                    centerX, kHintY);
 
+    // Linia 2: nazwa akcji — jeden wspolny rozmiar dla wszystkich stanow.
+    gfx->setFont(titleFont(gfx));
     gfx->setTextColor(accent);
-    text::drawFitted(gfx, pending == input::ButtonAction::None ? "..." : input::actionLabel(pending),
-                     layout::kScreenWidth / 2, kActionY, layout::kContentWidth);
+    gfx->drawString(pending == input::ButtonAction::None ? "..." : input::actionLabel(pending),
+                    centerX, kActionY);
 
     // Pasek pokazuje postep w obrebie biezacego progu, nie calego przytrzymania —
-    // inaczej po 3 sekundach zatrzymywalby sie na 30% i nic by nie mowil.
+    // inaczej po 2 sekundach zatrzymywalby sie i nic by nie mowil.
     const auto& config = fsm.config();
     const uint32_t held = fsm.heldMs();
     uint32_t lower = 0;
@@ -61,6 +80,7 @@ void HoldPrompt::draw(ScreenBuffer& buffer, const input::ButtonFsm& fsm) {
     gfx->fillRect(kBarMargin, kBarY, static_cast<int>(static_cast<float>(width) * fraction),
                   kBarHeight, accent);
 
+    // Linia 3: co dalej — zawsze maly font, ten sam w kazdym stanie.
     gfx->setFont(&fonts::Font0);
     gfx->setTextColor(color::kMuted);
     if (next != input::ButtonAction::None) {
@@ -68,10 +88,9 @@ void HoldPrompt::draw(ScreenBuffer& buffer, const input::ButtonFsm& fsm) {
         std::snprintf(hint, sizeof(hint), "ZA %.1f s: %s",
                       static_cast<double>(fsm.msToNextThreshold()) / 1000.0,
                       input::actionLabel(next));
-        text::drawFitted(gfx, hint, layout::kScreenWidth / 2, kNextY, layout::kContentWidth);
+        gfx->drawString(hint, centerX, kNextY);
     } else {
-        text::drawFitted(gfx, "OSTATNI PROG", layout::kScreenWidth / 2, kNextY,
-                         layout::kContentWidth);
+        gfx->drawString("OSTATNI PROG", centerX, kNextY);
     }
 
     buffer.present();
