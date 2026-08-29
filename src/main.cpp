@@ -122,8 +122,9 @@ state::DeviceStateConfig makeStateConfig() {
     config.armingDelayMs = cfg::kArmingDelayMs;
     config.powerLossConfirmMs = cfg::kPowerLossConfirmMs;
     config.powerReturnConfirmMs = cfg::kPowerReturnConfirmMs;
-    // Antydatowanie: pelen lancuch detekcji zaniku to okno tetna + potwierdzenie.
-    config.detectionLatencyMs = cfg::kChargePulseHoldMs + cfg::kPowerLossConfirmMs;
+    // Antydatowanie o czas detekcji. Napiecie wejsciowe jest odczytem
+    // natychmiastowym, wiec zostaje samo potwierdzenie czasowe.
+    config.detectionLatencyMs = cfg::kPowerLossConfirmMs;
 #ifdef MMB_BENCH
     config.armingDelayMs = 20000;
     config.detectionLatencyMs = 0;
@@ -454,6 +455,7 @@ void refreshDisplay() {
         model.charging = g_power.rawCharging();
         model.externalPower = g_power.isExternal();
         model.maxPulseGapMs = g_power.maxPulseGapMs();
+        model.vbusMillivolts = g_power.vbusMillivolts();
         model.stateName = state::stateName(g_deviceState.state());
         model.alarmEnabled = g_alarmEnabled;
         model.alarmArmed = g_alarm.isArmed();

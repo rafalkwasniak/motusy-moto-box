@@ -73,12 +73,12 @@ void HardwareView::draw(ScreenBuffer& buffer, const HardwareViewModel& model) {
     // Zasilanie: stan odfiltrowany, surowy impuls ladowania i najdluzsza
     // zmierzona przerwa miedzy impulsami — po niej dobieramy prog w PowerSource.
     gfx->setTextColor(model.externalPower ? color::kRiding : color::kMuted);
-    std::snprintf(text, sizeof(text), "%s  %d.%02dV %d%%  imp:%s luka:%lus  %s",
+    std::snprintf(text, sizeof(text), "%s %d.%02dV %d%% vin:%d.%02dV imp:%s %s",
                   model.externalPower ? "EXT" : "BAT",
                   model.batteryMillivolts / 1000, (model.batteryMillivolts % 1000) / 10,
-                  model.batteryPercent, model.charging ? "T" : "N",
-                  static_cast<unsigned long>(model.maxPulseGapMs / 1000),
-                  model.stateName);
+                  model.batteryPercent,
+                  model.vbusMillivolts / 1000, (model.vbusMillivolts % 1000) / 10,
+                  model.charging ? "T" : "N", model.stateName);
     gfx->drawString(text, layout::kContentLeft, kPowerY);
 
     // Modul vs. faktyczne czuwanie — te dwie wartosci musza sie zgadzac

@@ -24,6 +24,9 @@ struct HardwareViewModel {
     bool externalPower = false;
     /// Najdluzsza zaobserwowana przerwa miedzy impulsami ladowania [ms].
     uint32_t maxPulseGapMs = 0;
+    /// Napiecie wejsciowe zmierzone przez PMIC [mV]. Jesli dziala, jest
+    /// pewniejszym sygnalem obecnosci zasilania niz heurystyka tetna.
+    int vbusMillivolts = 0;
     const char* stateName = "";
     /// Modul alarmowy wlaczony przez uzytkownika (§16).
     bool alarmEnabled = false;

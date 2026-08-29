@@ -42,7 +42,7 @@ plan awaryjny, żeby brak potwierdzenia nie blokował projektu.
 
 | # | Pytanie | Plan B jeśli „nie" | Stan |
 |---|---|---|---|
-| V1 | Czy da się odróżnić „VBUS obecny" od „bateria naładowana"? (§3) | histereza na napięciu baterii | ⚠️ przesłanka, patrz niżej |
+| V1 | Czy da się odróżnić „VBUS obecny" od „bateria naładowana"? (§3) | histereza na napięciu baterii | ✅ **TAK — PMIC mierzy napięcie wejściowe** |
 | V2 | Czy piny INT BMI270 są wyprowadzone do GPIO ESP32? | wybudzanie timerem PMIC co ~2 s | otwarte |
 | V3 | Czy jest RTC PCF8563 @0x51? (źródła sprzeczne) | nieistotne dla MVP | ✅ **RTC NIE MA** |
 | V4 | Realny pobór prądu w deep sleep z aktywnym IMU | korekta czasu czuwania w §4 | otwarte |
@@ -71,15 +71,24 @@ Potwierdzone dodatkowo:
   bez znaczenia, ale w v2 (znaczniki czasu przejazdów) trzeba będzie liczyć czas
   inaczej albo brać go z GPS.
 
-**Przesłanka do V1 — wymaga jeszcze jednego testu.** Przy baterii naładowanej do
-pełna (100%, 4180 mV) i podłączonym USB `M5.Power.isCharging()` zwraca **true**.
-Gdyby raportowało rzeczywisty prąd ładowania, przy pełnej baterii powinno być false.
-To sugeruje, że funkcja śledzi raczej **obecność zasilania zewnętrznego** niż sam
-proces ładowania — czyli dokładnie to, czego potrzebuje maszyna stanów stacyjki.
+**V1 ROZSTRZYGNIĘTE (2026-08-29).** Droga do odpowiedzi miała trzy etapy i warto
+ją zapamiętać, bo pokazuje, jak łatwo zbudować skomplikowane obejście problemu,
+który ma proste rozwiązanie:
 
-Test domykający: odłączyć USB przy pełnej baterii i sprawdzić, czy przechodzi
-na false. Dopóki to nie jest potwierdzone, `PowerSource` zostaje z histerezą
-napięciową jako zabezpieczeniem.
+1. Założenie, że `isCharging()` znaczy „jest prąd" — **błędne**. Przy pełnej
+   baterii funkcja **migocze**, bo ładowarka cyklicznie kończy i wznawia
+   doładowywanie. Naiwna implementacja uzbroiłaby alarm w trakcie jazdy.
+2. Obejście: traktowanie `isCharging()` jak tętna — zasilanie obecne, jeśli
+   impuls był w ciągu 15 s. Działało, ale kosztowało ~17 s opóźnienia detekcji
+   i wymagało antydatowania odliczania.
+3. **Właściwe rozwiązanie:** PMIC M5PM1 ma rejestr z napięciem wejściowym,
+   dostępny przez `M5.Power.M5pm1.getVBUSVoltage()`. Zmierzone: **5,21 V
+   z kablem, 0 V bez**. Jednoznacznie i natychmiast.
+
+`PowerSource` używa teraz napięcia jako sygnału podstawowego (progi 4,0 V / 3,0 V
+z histerezą), a mechanizm tętna został fallbackiem na wypadek płytki, która tego
+rejestru nie oddaje. Potwierdzenie czasowe zaniku (2 s) zostaje — chroni przed
+zapadem napięcia przy rozruchu silnika.
 
 ---
 

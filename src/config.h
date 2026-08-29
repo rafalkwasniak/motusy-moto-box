@@ -29,16 +29,16 @@ constexpr uint32_t kSplashDurationMs = 5000;
 /// Specyfikacja mowila o 3 minutach; skrocone do 2 na zyczenie (2026-08-28).
 constexpr uint32_t kArmingDelayMs = 2UL * 60UL * 1000UL;
 
-// Detekcja zasilania. Okno "tetna" ladowania w PowerSource filtruje zarowno
-// migotanie isCharging() przy pelnej baterii, jak i zapady rozruchu — wiec
-// potwierdzenie w maszynie stanow moze byc krotkie. Odliczanie jest
-// antydatowane o sume obu czasow, przez co ekran gasnie rowno kArmingDelayMs
-// po FAKTYCZNYM odlaczeniu zasilania.
-// Okno 15 s to wartosc ostrozna — po odczycie "luki" z ekranu SPRZET mozna
-// je zejsc do ~10 s (prog musi byc wyraznie wiekszy od zmierzonej luki).
-constexpr uint32_t kChargePulseHoldMs = 15000;
+// Detekcja zasilania opiera sie na napieciu wejsciowym mierzonym przez PMIC
+// (5,21 V z kablem, 0 V bez — zmierzone 2026-08-29), wiec jest natychmiastowa.
+// Zostaje samo potwierdzenie czasowe, niesymetryczne: zanik potwierdzamy
+// dluzej, bo rozruch silnika zapada napiecie na ulamek sekundy, a falszywy
+// zanik uzbroilby alarm w trakcie jazdy.
 constexpr uint32_t kPowerLossConfirmMs = 2000;
 constexpr uint32_t kPowerReturnConfirmMs = 1500;
+
+/// Fallback dla plytek nieoddajacych napiecia wejsciowego — patrz PowerSource.
+constexpr uint32_t kChargePulseHoldMs = 15000;
 
 // Ekran obudzony na baterii gasnie sam — kazde zgasniecie ekranu przy
 // wlaczonym module konczy sie ponownym uzbrojeniem alarmu.
