@@ -5,7 +5,9 @@
 namespace ui {
 
 void ScreenBuffer::begin() {
-    canvas_.setPsram(true);
+    // Bufor w pamieci WEWNETRZNEJ, nie w PSRAM: 65 kB miesci sie z ogromnym
+    // zapasem, a PSRAM pobieralby prad rowniez podczas light sleep w czuwaniu.
+    canvas_.setPsram(false);
     canvas_.setColorDepth(16);
     buffered_ = canvas_.createSprite(layout::kScreenWidth, layout::kScreenHeight) != nullptr;
 }

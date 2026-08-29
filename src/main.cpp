@@ -150,11 +150,17 @@ bool g_audioActive = false;
 bool g_swallowView = false;
 bool g_swallowAction = false;
 
-/// Pomiar udzialu snu w czuwaniu. Bez tej liczby optymalizacja poboru jest
-/// zgadywaniem: 95% snu oznacza problem w samym light sleep, 70% — ze warto
-/// rzadziej sie budzic.
+// Pomiar czuwania. Wartosci sa ZAMRAZANE przy obudzeniu ekranu — inaczej
+// licznik czasu bieglby dalej, a sen juz nie przyrastal (ekran swieci), przez
+// co odczyt spadalby w oczach i nie dalo by sie go spokojnie przeczytac.
 uint64_t g_sleepUs = 0;
+uint64_t g_awakeUs = 0;
+uint32_t g_wakeCount = 0;
+int64_t g_lastWakeEndUs = 0;
 uint32_t g_standbyStartMs = 0;
+int g_frozenSleepPercent = 0;
+uint32_t g_frozenAwakeUs = 0;
+uint32_t g_frozenStandbySeconds = 0;
 
 bool g_imuAvailable = false;
 bool g_alarmEnabled = true;
@@ -466,11 +472,9 @@ void refreshDisplay() {
         model.stateName = state::stateName(g_deviceState.state());
         model.alarmEnabled = g_alarmEnabled;
         model.alarmArmed = g_alarm.isArmed();
-        model.standbySeconds = g_standbyStartMs == 0 ? 0 : (millis() - g_standbyStartMs) / 1000;
-        model.sleepPercent =
-            model.standbySeconds == 0
-                ? 0
-                : static_cast<int>(g_sleepUs / (model.standbySeconds * 10000ULL));
+        model.standbySeconds = g_frozenStandbySeconds;
+        model.sleepPercent = g_frozenSleepPercent;
+        model.awakeMicros = g_frozenAwakeUs;
         model.bufferedDisplay = g_buffer.isBuffered();
         model.freeHeapBytes = ESP.getFreeHeap();
         model.freePsramBytes = ESP.getFreePsram();
@@ -557,6 +561,15 @@ void setScreenOn(bool on) {
     if (on == g_screenOn) return;
     g_screenOn = on;
     if (on) {
+        // Zamrozenie wyniku pomiaru — od tej chwili nie ma juz snu do liczenia.
+        const uint32_t seconds =
+            g_standbyStartMs == 0 ? 0 : (millis() - g_standbyStartMs) / 1000;
+        if (seconds > 0) {
+            g_frozenStandbySeconds = seconds;
+            g_frozenSleepPercent = static_cast<int>(g_sleepUs / (seconds * 10000ULL));
+            g_frozenAwakeUs =
+                g_wakeCount == 0 ? 0 : static_cast<uint32_t>(g_awakeUs / g_wakeCount);
+        }
         M5.Display.wakeup();
         M5.Display.setBrightness(cfg::kDisplayBrightness);
         g_lastDisplayMs = 0;
@@ -564,6 +577,9 @@ void setScreenOn(bool on) {
         M5.Display.setBrightness(0);
         M5.Display.sleep();
         g_sleepUs = 0;
+        g_awakeUs = 0;
+        g_wakeCount = 0;
+        g_lastWakeEndUs = 0;
         g_standbyStartMs = millis();
     }
 
@@ -912,14 +928,26 @@ void loop() {
         // Faza 1 testu stanowiskowego: bez light sleep, zeby serial zyl.
         delay(wakeIntervalMs);
 #else
+        // Domeny RTC nie sa nam do niczego potrzebne — niech spia razem z reszta.
+        esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF);
+        esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF);
+
         gpio_wakeup_enable(GPIO_NUM_11, GPIO_INTR_LOW_LEVEL);
         gpio_wakeup_enable(GPIO_NUM_12, GPIO_INTR_LOW_LEVEL);
         esp_sleep_enable_gpio_wakeup();
         esp_sleep_enable_timer_wakeup(wakeIntervalMs * 1000ULL);
 
         const int64_t before = esp_timer_get_time();
+        // Czas aktywny to odcinek od wyjscia z poprzedniego snu do wejscia
+        // w kolejny — czyli dokladnie jedna iteracja petli glownej.
+        if (g_lastWakeEndUs != 0) {
+            g_awakeUs += static_cast<uint64_t>(before - g_lastWakeEndUs);
+            ++g_wakeCount;
+        }
         esp_light_sleep_start();
-        g_sleepUs += static_cast<uint64_t>(esp_timer_get_time() - before);
+        const int64_t after = esp_timer_get_time();
+        g_sleepUs += static_cast<uint64_t>(after - before);
+        g_lastWakeEndUs = after;
 #endif
     }
 }

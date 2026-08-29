@@ -35,6 +35,8 @@ struct HardwareViewModel {
     /// Ile czasu urzadzenie spedzilo w light sleep od zgaszenia ekranu [%].
     int sleepPercent = 0;
     uint32_t standbySeconds = 0;
+    /// Sredni czas jednej iteracji petli miedzy snami [us].
+    uint32_t awakeMicros = 0;
     bool bufferedDisplay = false;
     uint32_t freeHeapBytes = 0;
     uint32_t freePsramBytes = 0;

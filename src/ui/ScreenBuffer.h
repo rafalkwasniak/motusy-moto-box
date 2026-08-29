@@ -1,8 +1,9 @@
 // Motusy Moto Box — wspolny bufor rysowania dla wszystkich widokow.
 //
 // Rysowanie prosto na ST7789 migocze przy pelnym odswiezeniu. Sprite 240x135
-// w 16 bitach to ~65 kB — nie zmiescilby sie komfortowo w pamieci wewnetrznej,
-// ale StickS3 ma 8 MB PSRAM, wiec trzymamy go tam.
+// w 16 bitach to ~65 kB i trzymamy go w pamieci WEWNETRZNEJ: firmware zajmuje
+// raptem 25 z 320 kB, wiec miejsca jest pod dostatkiem, a PSRAM pobieralby
+// prad takze w czuwaniu (light sleep) — przy baterii 250 mAh to sie liczy.
 //
 // Gdy alokacja sie nie powiedzie, rysujemy bezposrednio na ekran: gorzej
 // wyglada, ale urzadzenie dziala.
