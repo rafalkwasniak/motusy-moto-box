@@ -27,6 +27,9 @@ struct PersistentState {
     motion::RideValues overall;
     motion::RideValues ride;
 
+    /// Ile juz trwa biezacy przejazd [s] — zeby przezyl restart na baterii (§25).
+    uint32_t rideDurationS = 0;
+
     /// §16 — stan modulu alarmowego. Domyslnie wlaczony: urzadzenie ma pilnowac
     /// motocykla, wiec brak zapisanego ustawienia nie powinien zostawiac go bez ochrony.
     bool alarmEnabled = true;
@@ -68,12 +71,14 @@ public:
 
     LoadResult load(PersistentState& out);
 
-    /// Zapisuje oba zestawy wynikow wraz z flaga archiwizacji przejazdu.
+    /// Zapisuje oba zestawy wynikow wraz z flaga archiwizacji przejazdu
+    /// i czasem trwania biezacego przejazdu.
     /// Wolane okresowo i przy zaniku zasilania.
     bool saveResults(const motion::RideValues& overall, const motion::RideValues& ride,
-                     bool rideArchived);
+                     bool rideArchived, uint32_t rideDurationS);
 
-    /// Zapisuje historie przejazdow. Wolane przy archiwizacji przejazdu.
+    /// Zapisuje historie przejazdow wraz z czasami ich trwania.
+    /// Wolane przy archiwizacji przejazdu.
     bool saveHistory(const motion::RideHistory& history);
 
     /// Stan kolejki wysylki. Zapisywany przy archiwizacji przejazdu i po

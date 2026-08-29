@@ -21,6 +21,7 @@
 #include "ButtonFsm.h"
 #include "DeviceStateMachine.h"
 #include "Orientation.h"
+#include "RideClock.h"
 #include "RideMetrics.h"
 #include "UploadQueue.h"
 #include "config.h"
@@ -45,6 +46,8 @@ motion::Orientation g_orientation;
 motion::RideMetrics g_metrics;
 motion::MountCalibration g_mount;
 motion::RideHistory g_history;
+/// Czas trwania biezacego przejazdu — od pierwszego do ostatniego ruchu.
+motion::RideClock g_rideClock;
 /// Czy biezacy przejazd trafil juz do historii — patrz archiveCurrentRide().
 bool g_rideArchived = false;
 
@@ -209,7 +212,9 @@ void drawMessage(const char* title, const char* detail, uint16_t accent) {
 /// zanik nigdy nie zostal potwierdzony, np. po restarcie na baterii).
 void archiveCurrentRide() {
     if (g_rideArchived) return;
-    if (!g_history.push(g_metrics.currentRide())) return;  // pusty przejazd
+    if (!g_history.push(g_metrics.currentRide(), g_rideClock.seconds())) {
+        return;  // pusty przejazd
+    }
     g_rideArchived = true;
 
     // Numer nadajemy dokladnie tam, gdzie przejazd wchodzi do historii —
@@ -219,7 +224,8 @@ void archiveCurrentRide() {
 
     g_store.saveHistory(g_history);
     g_store.saveUploadState(g_queue.lastSeq(), g_queue.sentThrough());
-    g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived);
+    g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived,
+                        g_rideClock.seconds());
 }
 
 /// Zapis wynikow wedlug strategii z architektury §6.2: okresowo i tylko gdy
@@ -231,7 +237,8 @@ void saveResultsIfDirty(bool force) {
     const uint32_t nowMs = millis();
     if (!force && nowMs - g_lastAutosaveMs < cfg::kAutosaveIntervalMs) return;
 
-    if (g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived)) {
+    if (g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived,
+                            g_rideClock.seconds())) {
         g_metrics.clearDirty();
     }
     g_lastAutosaveMs = nowMs;
@@ -277,8 +284,12 @@ void runMountCalibration() {
 /// §15 — reset obu zestawow wynikow. Nie dotyka kalibracji ani stanu alarmu.
 void runResultsReset() {
     g_metrics.resetAll();
+    // Skoro zerujemy OSTATNIA JAZDE, jej czas trwania tez zaczyna sie od nowa —
+    // inaczej przejazd o zerowych rekordach mialby polgodzinny czas.
+    g_rideClock.reset();
     const bool saved =
-        g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived);
+        g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived,
+                            g_rideClock.seconds());
     if (saved) g_metrics.clearDirty();
 
     drawMessage("POMIARY WYZEROWANE", saved ? "" : "BLAD ZAPISU",
@@ -326,14 +337,19 @@ void restoreState(bool externalPowerAtBoot) {
     if (externalPowerAtBoot) {
         // Nowa sesja. Jesli poprzedni przejazd nie zdazyl trafic do historii
         // (urzadzenie padlo w trakcie), ratujemy go teraz — przed wyzerowaniem.
+        // Czas trwania odtwarzamy PRZED archiwizacja, bo dotyczy jeszcze
+        // tamtego przejazdu; dopiero potem zerujemy licznik.
         g_metrics.restore(state.overall, state.ride);
+        g_rideClock.restore(state.rideDurationS);
         archiveCurrentRide();
         g_metrics.startNewRide();
+        g_rideClock.reset();
         g_metrics.clearDirty();
         g_rideArchived = false;
     } else {
         // Restart na baterii: przejazd trwa dalej (§25).
         g_metrics.restore(state.overall, state.ride);
+        g_rideClock.restore(state.rideDurationS);
     }
 }
 
@@ -416,6 +432,9 @@ void pumpImu() {
     // w diagnostyce), tylko nic nie zapisujemy.
     if (g_mount.isCalibrated() && g_deviceState.state() == state::DeviceState::Riding) {
         g_metrics.update(g_orientation.state());
+        // Czas trwania liczymy z tego samego warunku co rekordy: manipulowanie
+        // urzadzeniem na parkingu nie jest przejazdem.
+        g_rideClock.update(!g_orientation.state().stationary, millis());
     }
 }
 
@@ -801,6 +820,7 @@ void handleStateEvent(state::DeviceEvent event) {
             g_alarm.disarm();
             driveSiren(guard::AlarmOutput{});
             g_metrics.startNewRide();
+            g_rideClock.reset();
             g_rideArchived = false;
 #if MMB_RAW_LOGGER
             g_logger.startSession(millis());

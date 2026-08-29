@@ -12,6 +12,7 @@
 
 #include "MountCalibration.h"
 #include "Orientation.h"
+#include "RideClock.h"
 #include "RideHistory.h"
 #include "RideMetrics.h"
 
@@ -399,19 +400,116 @@ void test_history_skips_empty_rides() {
 
 void test_history_restore_preserves_order() {
     RideHistory saved;
-    saved.push(rideWith(1.0f));
-    saved.push(rideWith(2.0f));
-    saved.push(rideWith(3.0f));
+    saved.push(rideWith(1.0f), 100);
+    saved.push(rideWith(2.0f), 200);
+    saved.push(rideWith(3.0f), 300);
+
+    RideValues flat[RideHistory::kCapacity];
+    uint32_t durations[RideHistory::kCapacity] = {};
+    for (size_t i = 0; i < saved.count(); ++i) {
+        flat[i] = saved.at(i);
+        durations[i] = saved.durationAt(i);
+    }
+
+    RideHistory loaded;
+    loaded.restore(flat, durations, saved.count());
+
+    TEST_ASSERT_EQUAL_UINT32(3, loaded.count());
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 3.0f, loaded.at(0).maxLeanRightDeg);
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 1.0f, loaded.at(2).maxLeanRightDeg);
+
+    // Czas trwania musi zostac przy swoim przejezdzie, a nie przy pozycji.
+    TEST_ASSERT_EQUAL_UINT32(300, loaded.durationAt(0));
+    TEST_ASSERT_EQUAL_UINT32(100, loaded.durationAt(2));
+}
+
+/// Pamiec sprzed wprowadzenia pomiaru czasu nie ma tablicy czasow — wpisy maja
+/// wtedy zero, ale poza tym wracaja normalnie.
+void test_history_restore_without_durations() {
+    RideHistory saved;
+    saved.push(rideWith(1.0f), 100);
+    saved.push(rideWith(2.0f), 200);
 
     RideValues flat[RideHistory::kCapacity];
     for (size_t i = 0; i < saved.count(); ++i) flat[i] = saved.at(i);
 
     RideHistory loaded;
-    loaded.restore(flat, saved.count());
+    loaded.restore(flat, nullptr, saved.count());
 
-    TEST_ASSERT_EQUAL_UINT32(3, loaded.count());
-    TEST_ASSERT_FLOAT_WITHIN(0.1f, 3.0f, loaded.at(0).maxLeanRightDeg);
-    TEST_ASSERT_FLOAT_WITHIN(0.1f, 1.0f, loaded.at(2).maxLeanRightDeg);
+    TEST_ASSERT_EQUAL_UINT32(2, loaded.count());
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 2.0f, loaded.at(0).maxLeanRightDeg);
+    TEST_ASSERT_EQUAL_UINT32(0, loaded.durationAt(0));
+}
+
+// ── Czas trwania przejazdu ──────────────────────────────────────────────────
+
+void test_clock_ignores_time_before_first_movement() {
+    RideClock clock;
+
+    // Silnik chodzi, motocykl stoi — to jeszcze nie przejazd.
+    for (uint32_t t = 0; t < 60000; t += 1000) clock.update(false, t);
+    TEST_ASSERT_FALSE(clock.started());
+    TEST_ASSERT_EQUAL_UINT32(0, clock.seconds());
+
+    clock.update(true, 60000);
+    clock.update(true, 90000);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(30, clock.seconds(),
+                                     "Liczy sie dopiero od pierwszego ruchu");
+}
+
+/// Postoj na swiatlach to nadal ta sama jazda — czas biegnie.
+void test_clock_counts_pauses_inside_the_ride() {
+    RideClock clock;
+
+    clock.update(true, 10000);
+    for (uint32_t t = 11000; t < 70000; t += 1000) clock.update(false, t);
+    clock.update(true, 70000);
+
+    TEST_ASSERT_EQUAL_UINT32(60, clock.seconds());
+}
+
+/// Zapomniana stacyjka po zaparkowaniu nie moze doliczac minut.
+void test_clock_ignores_time_after_last_movement() {
+    RideClock clock;
+
+    clock.update(true, 10000);
+    clock.update(true, 40000);
+    for (uint32_t t = 41000; t < 600000; t += 1000) clock.update(false, t);
+
+    TEST_ASSERT_EQUAL_UINT32(30, clock.seconds());
+}
+
+/// Restart na baterii (§25): przejazd trwa dalej, czas dolicza sie do zapisanego.
+void test_clock_continues_after_restart() {
+    RideClock clock;
+    clock.restore(120);
+
+    TEST_ASSERT_EQUAL_UINT32(120, clock.seconds());
+
+    clock.update(true, 5000);
+    clock.update(true, 25000);
+    TEST_ASSERT_EQUAL_UINT32(140, clock.seconds());
+}
+
+void test_clock_reset_starts_from_zero() {
+    RideClock clock;
+    clock.restore(120);
+    clock.update(true, 1000);
+    clock.reset();
+
+    TEST_ASSERT_EQUAL_UINT32(0, clock.seconds());
+    TEST_ASSERT_FALSE(clock.started());
+}
+
+/// millis() przekreca sie co 49 dni — czas przejazdu nie moze wtedy oszalec.
+void test_clock_survives_millis_overflow() {
+    RideClock clock;
+    const uint32_t beforeWrap = 0xFFFFF000;
+
+    clock.update(true, beforeWrap);
+    clock.update(true, beforeWrap + 20000);
+
+    TEST_ASSERT_EQUAL_UINT32(20, clock.seconds());
 }
 
 int main(int, char**) {
@@ -440,6 +538,14 @@ int main(int, char**) {
     RUN_TEST(test_history_drops_oldest_beyond_capacity);
     RUN_TEST(test_history_skips_empty_rides);
     RUN_TEST(test_history_restore_preserves_order);
+    RUN_TEST(test_history_restore_without_durations);
+
+    RUN_TEST(test_clock_ignores_time_before_first_movement);
+    RUN_TEST(test_clock_counts_pauses_inside_the_ride);
+    RUN_TEST(test_clock_ignores_time_after_last_movement);
+    RUN_TEST(test_clock_continues_after_restart);
+    RUN_TEST(test_clock_reset_starts_from_zero);
+    RUN_TEST(test_clock_survives_millis_overflow);
 
     return UNITY_END();
 }

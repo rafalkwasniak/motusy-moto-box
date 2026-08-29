@@ -24,7 +24,9 @@ motion::RideValues rideMarked(float marker) {
 /// Symuluje `count` przejazdow: kazdy trafia do historii i dostaje numer.
 void archiveRides(UploadQueue& queue, motion::RideHistory& history, int count) {
     for (int i = 1; i <= count; ++i) {
-        history.push(rideMarked(static_cast<float>(i)));
+        // Czas trwania niesie ten sam numer razy sto — widac, czy nie rozjechal
+        // sie z wynikami przy skladaniu przesylki.
+        history.push(rideMarked(static_cast<float>(i)), static_cast<uint32_t>(i) * 100);
         queue.onRideArchived();
     }
 }
@@ -73,6 +75,10 @@ void test_collect_returns_oldest_first() {
     // Numer musi trafic w ten przejazd, ktorym sie podaje.
     TEST_ASSERT_EQUAL_FLOAT(1.0f, records[0].values.maxLeanLeftDeg);
     TEST_ASSERT_EQUAL_FLOAT(3.0f, records[2].values.maxLeanLeftDeg);
+
+    // ...razem ze swoim czasem trwania.
+    TEST_ASSERT_EQUAL_UINT32(100, records[0].durationS);
+    TEST_ASSERT_EQUAL_UINT32(300, records[2].durationS);
 }
 
 void test_confirmation_empties_the_queue() {

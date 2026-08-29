@@ -16,6 +16,8 @@ constexpr const char* kKeyArchived = "arch";
 constexpr const char* kKeyHistory = "hist";
 constexpr const char* kKeyRideSeq = "seq";
 constexpr const char* kKeySent = "sent";
+constexpr const char* kKeyRideDuration = "rdur";
+constexpr const char* kKeyHistoryDuration = "hdur";
 
 /// Piec wartosci rekordowych, kolejnosc utrwalona przez kSchemaVersion.
 constexpr size_t kRideValuesBytes = 5 * sizeof(float);
@@ -24,6 +26,11 @@ constexpr size_t kMountBytes = 1 + 9 * sizeof(float);
 /// Licznik wpisow + pelna pojemnosc historii.
 constexpr size_t kHistoryBytes =
     1 + motion::RideHistory::kCapacity * kRideValuesBytes;
+/// Czasy trwania przejazdow z historii — osobny klucz, rownolegly do niej.
+/// Osobny, bo dolozenie ich do `kHistoryBytes` zmienialoby uklad istniejacego
+/// wpisu i wymagaloby podniesienia wersji schematu.
+constexpr size_t kHistoryDurationBytes =
+    motion::RideHistory::kCapacity * sizeof(uint32_t);
 
 void packFloat(uint8_t*& cursor, float value) {
     std::memcpy(cursor, &value, sizeof(float));
@@ -118,6 +125,7 @@ LoadResult Store::load(PersistentState& out) {
     // znaczy "zadnego przejazdu jeszcze nie ponumerowano".
     out.lastRideSeq = prefs_.getUInt(kKeyRideSeq, 0);
     out.sentThrough = prefs_.getUInt(kKeySent, 0);
+    out.rideDurationS = prefs_.getUInt(kKeyRideDuration, 0);
 
     {
         uint8_t historyBuffer[kHistoryBytes];
@@ -130,7 +138,15 @@ LoadResult Store::load(PersistentState& out) {
                 unpackRideValues(cursor, rides[i]);
                 cursor += kRideValuesBytes;
             }
-            out.history.restore(rides, count);
+
+            // Klucz dolozony pozniej niz sama historia. Jego brak znaczy
+            // "przejazdy sprzed pomiaru czasu" — ida z czasem zerowym.
+            uint32_t durations[motion::RideHistory::kCapacity] = {};
+            const bool haveDurations =
+                prefs_.getBytes(kKeyHistoryDuration, durations, kHistoryDurationBytes) ==
+                kHistoryDurationBytes;
+
+            out.history.restore(rides, haveDurations ? durations : nullptr, count);
         }
     }
 
@@ -146,7 +162,7 @@ LoadResult Store::load(PersistentState& out) {
 }
 
 bool Store::saveResults(const motion::RideValues& overall, const motion::RideValues& ride,
-                        bool rideArchived) {
+                        bool rideArchived, uint32_t rideDurationS) {
     if (!available_) return false;
 
     uint8_t buffer[kRideValuesBytes];
@@ -157,6 +173,7 @@ bool Store::saveResults(const motion::RideValues& overall, const motion::RideVal
     packRideValues(ride, buffer);
     if (prefs_.putBytes(kKeyRide, buffer, kRideValuesBytes) != kRideValuesBytes) return false;
 
+    prefs_.putUInt(kKeyRideDuration, rideDurationS);
     prefs_.putUChar(kKeyArchived, rideArchived ? 1 : 0);
     prefs_.putUInt(kKeyVersion, kSchemaVersion);
     return true;
@@ -174,6 +191,16 @@ bool Store::saveHistory(const motion::RideHistory& history) {
     }
 
     if (prefs_.putBytes(kKeyHistory, buffer, kHistoryBytes) != kHistoryBytes) return false;
+
+    uint32_t durations[motion::RideHistory::kCapacity] = {};
+    for (size_t i = 0; i < motion::RideHistory::kCapacity; ++i) {
+        durations[i] = history.durationAt(i);
+    }
+    if (prefs_.putBytes(kKeyHistoryDuration, durations, kHistoryDurationBytes) !=
+        kHistoryDurationBytes) {
+        return false;
+    }
+
     prefs_.putUInt(kKeyVersion, kSchemaVersion);
     return true;
 }
