@@ -15,6 +15,7 @@
 #include <M5Unified.h>
 #include <driver/gpio.h>
 #include <esp_sleep.h>
+#include <esp_timer.h>
 
 #include "AlarmEngine.h"
 #include "ButtonFsm.h"
@@ -148,6 +149,12 @@ bool g_audioActive = false;
 /// nie polykalo klikniecia drugiego.
 bool g_swallowView = false;
 bool g_swallowAction = false;
+
+/// Pomiar udzialu snu w czuwaniu. Bez tej liczby optymalizacja poboru jest
+/// zgadywaniem: 95% snu oznacza problem w samym light sleep, 70% — ze warto
+/// rzadziej sie budzic.
+uint64_t g_sleepUs = 0;
+uint32_t g_standbyStartMs = 0;
 
 bool g_imuAvailable = false;
 bool g_alarmEnabled = true;
@@ -459,6 +466,11 @@ void refreshDisplay() {
         model.stateName = state::stateName(g_deviceState.state());
         model.alarmEnabled = g_alarmEnabled;
         model.alarmArmed = g_alarm.isArmed();
+        model.standbySeconds = g_standbyStartMs == 0 ? 0 : (millis() - g_standbyStartMs) / 1000;
+        model.sleepPercent =
+            model.standbySeconds == 0
+                ? 0
+                : static_cast<int>(g_sleepUs / (model.standbySeconds * 10000ULL));
         model.bufferedDisplay = g_buffer.isBuffered();
         model.freeHeapBytes = ESP.getFreeHeap();
         model.freePsramBytes = ESP.getFreePsram();
@@ -551,6 +563,8 @@ void setScreenOn(bool on) {
     } else {
         M5.Display.setBrightness(0);
         M5.Display.sleep();
+        g_sleepUs = 0;
+        g_standbyStartMs = millis();
     }
 
     // Zielona dioda zasilania swieci non stop — M5Unified zapala ja przy
@@ -889,15 +903,23 @@ void loop() {
     // wylacznie na baterii, wiec utrata USB nie jest problemem. Przyciski
     // (GPIO 11/12, aktywne w stanie niskim) budza natychmiast.
     if (!g_screenOn && g_deviceState.maySleep() && !g_audioActive) {
+        // Przy wylaczonym alarmie nie ma czego probkowac — budzimy sie tylko
+        // po to, zeby sprawdzic, czy nie wrocilo zasilanie.
+        const uint32_t wakeIntervalMs = (deviceState == state::DeviceState::Armed)
+                                            ? cfg::kArmedSampleIntervalMs
+                                            : cfg::kIdleWakeIntervalMs;
 #if defined(MMB_BENCH) && !defined(MMB_BENCH_SLEEP)
         // Faza 1 testu stanowiskowego: bez light sleep, zeby serial zyl.
-        delay(cfg::kArmedSampleIntervalMs);
+        delay(wakeIntervalMs);
 #else
         gpio_wakeup_enable(GPIO_NUM_11, GPIO_INTR_LOW_LEVEL);
         gpio_wakeup_enable(GPIO_NUM_12, GPIO_INTR_LOW_LEVEL);
         esp_sleep_enable_gpio_wakeup();
-        esp_sleep_enable_timer_wakeup(cfg::kArmedSampleIntervalMs * 1000ULL);
+        esp_sleep_enable_timer_wakeup(wakeIntervalMs * 1000ULL);
+
+        const int64_t before = esp_timer_get_time();
         esp_light_sleep_start();
+        g_sleepUs += static_cast<uint64_t>(esp_timer_get_time() - before);
 #endif
     }
 }

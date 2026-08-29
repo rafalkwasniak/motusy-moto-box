@@ -32,6 +32,9 @@ struct HardwareViewModel {
     bool alarmEnabled = false;
     /// Silnik alarmu faktycznie czuwa. Rozjazd tych dwoch wartosci oznacza blad.
     bool alarmArmed = false;
+    /// Ile czasu urzadzenie spedzilo w light sleep od zgaszenia ekranu [%].
+    int sleepPercent = 0;
+    uint32_t standbySeconds = 0;
     bool bufferedDisplay = false;
     uint32_t freeHeapBytes = 0;
     uint32_t freePsramBytes = 0;

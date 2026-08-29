@@ -65,8 +65,14 @@ constexpr uint32_t kButtonCalibrationHoldMs = 4000;
 // ── Alarm i dzwiek ─────────────────────────────────────────────────────────
 /// Glosnosc sygnalizacji 0-255. Wbudowany glosnik 1 W jest zaskakujaco donosny.
 constexpr uint8_t kSpeakerVolume = 255;
-/// Odstep miedzy probkami IMU w czuwaniu — light sleep miedzy nimi [ms].
+/// Odstep miedzy probkami IMU przy UZBROJONYM alarmie [ms] — kompromis
+/// miedzy zuzyciem a czasem reakcji na ruch.
 constexpr uint32_t kArmedSampleIntervalMs = 40;
+
+/// Odstep miedzy wybudzeniami przy WYLACZONYM alarmie [ms]. Nie ma wtedy
+/// czego probkowac — wystarczy zajrzec, czy nie wrocilo zasilanie.
+/// Budzenie 25 razy na sekunde bylo w tym stanie czysta strata.
+constexpr uint32_t kIdleWakeIntervalMs = 1000;
 
 // ── Akwizycja IMU ──────────────────────────────────────────────────────────
 /// Docelowa czestotliwosc probkowania. Dynamika motocykla miesci sie ponizej

@@ -84,8 +84,9 @@ void HardwareView::draw(ScreenBuffer& buffer, const HardwareViewModel& model) {
     // Modul vs. faktyczne czuwanie — te dwie wartosci musza sie zgadzac
     // w stanie ALARM; rozjazd jest natychmiast widoczny.
     gfx->setTextColor(model.alarmEnabled ? color::kRiding : color::kMuted);
-    std::snprintf(text, sizeof(text), "ALM modul:%s  czuwa:%s",
-                  model.alarmEnabled ? "WL" : "WYL", model.alarmArmed ? "TAK" : "nie");
+    std::snprintf(text, sizeof(text), "ALM %s/%s  sen:%d%% (%lus)",
+                  model.alarmEnabled ? "WL" : "WYL", model.alarmArmed ? "czuwa" : "nie",
+                  model.sleepPercent, static_cast<unsigned long>(model.standbySeconds));
     gfx->drawString(text, layout::kContentLeft, kAlarmY);
 
     gfx->setTextColor(color::kMuted);
