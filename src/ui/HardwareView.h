@@ -39,7 +39,11 @@ struct HardwareViewModel {
     uint32_t awakeMicros = 0;
     bool bufferedDisplay = false;
     uint32_t freeHeapBytes = 0;
-    uint32_t freePsramBytes = 0;
+    /// Kolejka wysylki na motobix.motusy.top: ile przejazdow czeka i jaki
+    /// numer dostal ostatni. Zajmuje miejsce po wolnej pamieci PSRAM, ktora
+    /// od czasu jej wylaczenia (docs §4) zawsze pokazywala zero.
+    uint32_t pendingUploads = 0;
+    uint32_t lastRideSeq = 0;
 };
 
 class HardwareView {

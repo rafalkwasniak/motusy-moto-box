@@ -90,11 +90,14 @@ void HardwareView::draw(ScreenBuffer& buffer, const HardwareViewModel& model) {
                   static_cast<unsigned long>(model.standbySeconds));
     gfx->drawString(text, layout::kContentLeft, kAlarmY);
 
-    gfx->setTextColor(color::kMuted);
-    std::snprintf(text, sizeof(text), "IMU %.0f Hz  RAM %uk  PSRAM %uk%s",
+    // WYS:<zalegle>/<numer ostatniego przejazdu> — po tym widac, czy numeracja
+    // przezyla restart i czy kolejka rosnie.
+    gfx->setTextColor(model.pendingUploads > 0 ? color::kWaiting : color::kMuted);
+    std::snprintf(text, sizeof(text), "IMU %.0f Hz  RAM %uk  WYS:%u/%u%s",
                   static_cast<double>(model.sampleRateHz),
                   static_cast<unsigned>(model.freeHeapBytes / 1024),
-                  static_cast<unsigned>(model.freePsramBytes / 1024),
+                  static_cast<unsigned>(model.pendingUploads),
+                  static_cast<unsigned>(model.lastRideSeq),
                   model.bufferedDisplay ? "" : "  (bufor: brak)");
     gfx->drawString(text, layout::kContentLeft, kMemoryY);
 

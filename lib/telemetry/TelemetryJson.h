@@ -25,9 +25,6 @@
 
 namespace telemetry {
 
-/// Najwiecej przejazdow w jednej przesylce — tyle, ile miesci historia.
-constexpr size_t kMaxRidesPerPayload = 10;
-
 /// Bufor wystarczajacy na pelna przesylke z zapasem.
 constexpr size_t kMaxPayloadBytes = 4096;
 

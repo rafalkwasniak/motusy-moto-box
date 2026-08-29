@@ -22,6 +22,7 @@
 #include "DeviceStateMachine.h"
 #include "Orientation.h"
 #include "RideMetrics.h"
+#include "UploadQueue.h"
 #include "config.h"
 #include "hal/I2cScan.h"
 #include "hal/ImuSource.h"
@@ -46,6 +47,10 @@ motion::MountCalibration g_mount;
 motion::RideHistory g_history;
 /// Czy biezacy przejazd trafil juz do historii — patrz archiveCurrentRide().
 bool g_rideArchived = false;
+
+/// Numeracja przejazdow i znacznik wyslania na motobix.motusy.top. Sama
+/// wysylka jeszcze nie istnieje — kolejka rosnie i czeka na radio (K5).
+telemetry::UploadQueue g_queue;
 
 hal::ImuSource g_imu;
 hal::Store g_store;
@@ -206,7 +211,14 @@ void archiveCurrentRide() {
     if (g_rideArchived) return;
     if (!g_history.push(g_metrics.currentRide())) return;  // pusty przejazd
     g_rideArchived = true;
+
+    // Numer nadajemy dokladnie tam, gdzie przejazd wchodzi do historii —
+    // te dwie rzeczy musza sie zgadzac co do sztuki, bo numer wpisu wynika
+    // z jego pozycji w historii.
+    g_queue.onRideArchived();
+
     g_store.saveHistory(g_history);
+    g_store.saveUploadState(g_queue.lastSeq(), g_queue.sentThrough());
     g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived);
 }
 
@@ -304,6 +316,7 @@ void restoreState(bool externalPowerAtBoot) {
     g_alarmEnabled = state.alarmEnabled;
     g_history = state.history;
     g_rideArchived = state.rideArchived;
+    g_queue.restore(state.lastRideSeq, state.sentThrough);
 
     if (state.mountCalibrated) {
         g_mount.restore(state.mountRotation);
@@ -477,7 +490,8 @@ void refreshDisplay() {
         model.awakeMicros = g_frozenAwakeUs;
         model.bufferedDisplay = g_buffer.isBuffered();
         model.freeHeapBytes = ESP.getFreeHeap();
-        model.freePsramBytes = ESP.getFreePsram();
+        model.pendingUploads = static_cast<uint32_t>(g_queue.pendingCount(g_history.count()));
+        model.lastRideSeq = g_queue.lastSeq();
         g_hardwareView.draw(g_buffer, model);
         return;
     }

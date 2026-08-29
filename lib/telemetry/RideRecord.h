@@ -18,11 +18,17 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "RideMetrics.h"
 
 namespace telemetry {
+
+/// Najwiecej przejazdow w jednej przesylce — tyle, ile miesci historia
+/// urzadzenia. Zgodnosc z `motion::RideHistory::kCapacity` pilnuje
+/// static_assert w UploadQueue.cpp.
+constexpr size_t kMaxRidesPerPayload = 10;
 
 /// Tozsamosc urzadzenia dolaczana do kazdej przesylki.
 struct DeviceIdentity {

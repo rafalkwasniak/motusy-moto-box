@@ -14,6 +14,8 @@ constexpr const char* kKeyAlarm = "alarm";
 constexpr const char* kKeyMount = "mount";
 constexpr const char* kKeyArchived = "arch";
 constexpr const char* kKeyHistory = "hist";
+constexpr const char* kKeyRideSeq = "seq";
+constexpr const char* kKeySent = "sent";
 
 /// Piec wartosci rekordowych, kolejnosc utrwalona przez kSchemaVersion.
 constexpr size_t kRideValuesBytes = 5 * sizeof(float);
@@ -82,7 +84,21 @@ LoadResult Store::load(PersistentState& out) {
     if (version != kSchemaVersion) {
         // Format sie zmienil. Lepiej zaczac od zera niz zinterpretowac stare
         // bajty jako nowe pola i pokazac uzytkownikowi wymyslone rekordy.
+        //
+        // NUMERACJA PRZEJAZDOW PRZEZYWA ZMIANE FORMATU. Numery sa kluczem po
+        // stronie API — gdyby wrocily do jedynki, kolejne przejazdy nadpisalyby
+        // te, ktore juz sa na koncie. Historia przepada, wiec nie ma juz czego
+        // wysylac: znacznik wyslania dogania numeracje.
+        const uint32_t lastSeq = prefs_.getUInt(kKeyRideSeq, 0);
         prefs_.clear();
+
+        if (lastSeq > 0) {
+            prefs_.putUInt(kKeyRideSeq, lastSeq);
+            prefs_.putUInt(kKeySent, lastSeq);
+            prefs_.putUInt(kKeyVersion, kSchemaVersion);
+        }
+        out.lastRideSeq = lastSeq;
+        out.sentThrough = lastSeq;
         return LoadResult::Migrated;
     }
 
@@ -97,6 +113,11 @@ LoadResult Store::load(PersistentState& out) {
 
     out.alarmEnabled = prefs_.getUChar(kKeyAlarm, 1) != 0;
     out.rideArchived = prefs_.getUChar(kKeyArchived, 0) != 0;
+
+    // Klucze dolozone po v2. Brak wpisu (pamiec sprzed tej wersji firmware)
+    // znaczy "zadnego przejazdu jeszcze nie ponumerowano".
+    out.lastRideSeq = prefs_.getUInt(kKeyRideSeq, 0);
+    out.sentThrough = prefs_.getUInt(kKeySent, 0);
 
     {
         uint8_t historyBuffer[kHistoryBytes];
@@ -153,6 +174,14 @@ bool Store::saveHistory(const motion::RideHistory& history) {
     }
 
     if (prefs_.putBytes(kKeyHistory, buffer, kHistoryBytes) != kHistoryBytes) return false;
+    prefs_.putUInt(kKeyVersion, kSchemaVersion);
+    return true;
+}
+
+bool Store::saveUploadState(uint32_t lastRideSeq, uint32_t sentThrough) {
+    if (!available_) return false;
+    prefs_.putUInt(kKeyRideSeq, lastRideSeq);
+    prefs_.putUInt(kKeySent, sentThrough);
     prefs_.putUInt(kKeyVersion, kSchemaVersion);
     return true;
 }

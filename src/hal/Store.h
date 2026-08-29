@@ -40,6 +40,13 @@ struct PersistentState {
     bool rideArchived = false;
 
     motion::RideHistory history;
+
+    /// Numer nadany ostatniemu zarchiwizowanemu przejazdowi i numer ostatniego
+    /// potwierdzonego przez serwer — caly stan kolejki wysylki (lib/telemetry).
+    /// Dwie liczby zamiast flagi przy kazdym wpisie historii, dzieki czemu
+    /// format historii i `kSchemaVersion` zostaja bez zmian.
+    uint32_t lastRideSeq = 0;
+    uint32_t sentThrough = 0;
 };
 
 enum class LoadResult {
@@ -69,6 +76,11 @@ public:
     /// Zapisuje historie przejazdow. Wolane przy archiwizacji przejazdu.
     bool saveHistory(const motion::RideHistory& history);
 
+    /// Stan kolejki wysylki. Zapisywany przy archiwizacji przejazdu i po
+    /// potwierdzeniu z serwera — obie sytuacje sa rzadkie, wiec zapis idzie
+    /// natychmiast.
+    bool saveUploadState(uint32_t lastRideSeq, uint32_t sentThrough);
+
     /// §22.1 — stan alarmu zmienia sie rzadko, wiec zapisujemy go natychmiast.
     bool saveAlarmEnabled(bool enabled);
 
@@ -83,6 +95,10 @@ public:
     /// Wersja schematu danych. Podniesienie uniewaznia zapisane dane
     /// zamiast czytac je w zlym formacie.
     /// v2 (2026-08-28): historia przejazdow + flaga archiwizacji.
+    ///
+    /// Stan kolejki wysylki (2026-08-29) CELOWO nie podniosl wersji: to dwa
+    /// nowe klucze czytane z wartoscia domyslna, a nie zmiana ukladu istniejacych
+    /// pol. Podbicie wersji skasowaloby uzytkownikowi kalibracje montazu.
     static constexpr uint32_t kSchemaVersion = 2;
 
 private:
