@@ -550,6 +550,12 @@ void setScreenOn(bool on) {
         M5.Display.setBrightness(0);
         M5.Display.sleep();
     }
+
+    // Zielona dioda zasilania swieci non stop — M5Unified zapala ja przy
+    // starcie i nigdy nie gasi. Przy baterii 250 mAh to realne obciazenie,
+    // a w czuwaniu nikt na nia nie patrzy: motocykl stoi, ekran jest zgaszony.
+    // Sterowana bitem LED_EN w PMIC, nie zwyklym GPIO.
+    M5.Power.M5pm1.setLedEnLevel(on);
 }
 
 /// Po akcji uzytkownika wracamy do normalnej pracy: pomiar czasu probkowania
