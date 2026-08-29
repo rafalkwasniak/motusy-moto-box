@@ -16,6 +16,7 @@
 
 #include <Preferences.h>
 
+#include "IntegrationConfig.h"
 #include "MountCalibration.h"
 #include "RideHistory.h"
 #include "RideMetrics.h"
@@ -50,6 +51,9 @@ struct PersistentState {
     /// format historii i `kSchemaVersion` zostaja bez zmian.
     uint32_t lastRideSeq = 0;
     uint32_t sentThrough = 0;
+
+    /// Siec domowa i token konta — wpisywane raz, przez ekran INTEGRACJA.
+    telemetry::IntegrationConfig integration;
 };
 
 enum class LoadResult {
@@ -85,6 +89,9 @@ public:
     /// potwierdzeniu z serwera — obie sytuacje sa rzadkie, wiec zapis idzie
     /// natychmiast.
     bool saveUploadState(uint32_t lastRideSeq, uint32_t sentThrough);
+
+    /// Ustawienia integracji. Zapisywane po zatwierdzeniu formularza.
+    bool saveIntegration(const telemetry::IntegrationConfig& integration);
 
     /// §22.1 — stan alarmu zmienia sie rzadko, wiec zapisujemy go natychmiast.
     bool saveAlarmEnabled(bool enabled);

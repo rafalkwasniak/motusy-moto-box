@@ -56,11 +56,20 @@ constexpr uint32_t kHoldPromptDelayMs = 500;
 // po 2 sekundy kazde:
 //     do 2 s   -> przelaczenie alarmu
 //     2 - 4 s  -> reset wynikow
-//     od 4 s   -> kalibracja
+//     4 - 6 s  -> kalibracja
+//     od 6 s   -> integracja ze strona
 /// §22.2 — prog resetu wynikow.
 constexpr uint32_t kButtonResetHoldMs = 2000;
 /// §22.3 — prog uruchomienia kalibracji.
 constexpr uint32_t kButtonCalibrationHoldMs = 4000;
+/// Prog konfiguracji integracji. Ostatnia pozycja celowo: wchodzi sie tu raz,
+/// przy uruchamianiu urzadzenia, a potem sie o niej zapomina. Droga przez
+/// reset i kalibracje jest bezpieczna — §23 wykonuje wylacznie akcje progu
+/// osiagnietego w chwili puszczenia.
+constexpr uint32_t kButtonIntegrationHoldMs = 6000;
+
+/// Jak dlugo ekran INTEGRACJA czeka, zanim sam wroci do wynikow.
+constexpr uint32_t kIntegrationScreenMs = 30000;
 
 // ── Alarm i dzwiek ─────────────────────────────────────────────────────────
 /// Glosnosc sygnalizacji 0-255. Wbudowany glosnik 1 W jest zaskakujaco donosny.

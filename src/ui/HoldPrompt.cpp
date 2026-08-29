@@ -28,6 +28,7 @@ uint16_t HoldPrompt::accentFor(input::ButtonAction action) {
         // Reset kasuje rekordy bezpowrotnie — kolor ostrzegawczy.
         case input::ButtonAction::MediumHold: return color::kWaiting;
         case input::ButtonAction::LongHold: return color::kCalibration;
+        case input::ButtonAction::ExtraHold: return color::kPrimary;
         default: return color::kMuted;
     }
 }
@@ -65,7 +66,11 @@ void HoldPrompt::draw(ScreenBuffer& buffer, const input::ButtonFsm& fsm) {
         upper = config.longHoldMs;
     } else if (pending == input::ButtonAction::LongHold) {
         lower = config.longHoldMs;
-        upper = config.longHoldMs;
+        upper = config.extraHoldMs;
+    } else if (pending == input::ButtonAction::ExtraHold) {
+        // Ostatni prog — pasek stoi pelny, nie ma juz dokad isc.
+        lower = config.extraHoldMs;
+        upper = config.extraHoldMs;
     }
 
     float fraction = 1.0f;

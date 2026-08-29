@@ -5,6 +5,7 @@ namespace input {
 ButtonAction ButtonFsm::classify(uint32_t heldMs) const {
     // Kolejnosc od najdluzszego progu — §23 wymaga, zeby dluzsze przytrzymanie
     // wykonalo wylacznie akcje najdluzszego osiagnietego progu.
+    if (heldMs >= config_.extraHoldMs) return ButtonAction::ExtraHold;
     if (heldMs >= config_.longHoldMs) return ButtonAction::LongHold;
     if (heldMs >= config_.mediumHoldMs) return ButtonAction::MediumHold;
     if (heldMs >= config_.debounceMs) return ButtonAction::ShortPress;
@@ -43,6 +44,7 @@ uint32_t ButtonFsm::msToNextThreshold() const {
     const uint32_t held = heldMs();
     if (held < config_.mediumHoldMs) return config_.mediumHoldMs - held;
     if (held < config_.longHoldMs) return config_.longHoldMs - held;
+    if (held < config_.extraHoldMs) return config_.extraHoldMs - held;
     return 0;
 }
 
@@ -51,6 +53,7 @@ ButtonAction ButtonFsm::nextAction() const {
     const uint32_t held = heldMs();
     if (held < config_.mediumHoldMs) return ButtonAction::MediumHold;
     if (held < config_.longHoldMs) return ButtonAction::LongHold;
+    if (held < config_.extraHoldMs) return ButtonAction::ExtraHold;
     return ButtonAction::None;
 }
 
@@ -59,6 +62,7 @@ const char* actionLabel(ButtonAction action) {
         case ButtonAction::ShortPress: return "PRZELACZ ALARM";
         case ButtonAction::MediumHold: return "RESET WYNIKOW";
         case ButtonAction::LongHold: return "KALIBRACJA";
+        case ButtonAction::ExtraHold: return "INTEGRACJA";
         case ButtonAction::None: return "";
     }
     return "";

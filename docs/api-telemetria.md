@@ -1,6 +1,6 @@
 # Motusy Moto Box — kontrakt API telemetrii
 
-Specyfikacja dla serwera `motobix.motusy.top` (Laravel). Opisuje to, co
+Specyfikacja dla serwera `motobox.motusy.top` (Laravel). Opisuje to, co
 urządzenie faktycznie wysyła — format jest zaimplementowany w
 `lib/telemetry/TelemetryJson.cpp` i obłożony testami, które sprawdzają
 dosłowną treść JSON-a. Zmiana kształtu przesyłki psuje te testy; to celowe,

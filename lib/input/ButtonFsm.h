@@ -5,11 +5,15 @@
 //     krotkie nacisniecie  ->  przelaczenie modulu alarmowego
 //     okolo 3 sekundy      ->  reset wynikow
 //     okolo 10 sekund      ->  kalibracja IMU
+//     jeszcze dluzej       ->  integracja ze strona (WiFi i token)
 //
 // SEDNO §23: akcja jest rozpoznawana DOPIERO NA PUSZCZENIU przycisku, wedlug
 // najdluzszego osiagnietego progu. Gdyby akcje odpalaly sie w trakcie trzymania,
 // droga do kalibracji (10 s) prowadzilaby przez reset wynikow (3 s) — czyli
 // uzytkownik chcacy skalibrowac urzadzenie zawsze najpierw kasowalby rekordy.
+//
+// Ta sama wlasnosc pozwolila dolozyc czwarty prog: droga do integracji wiedzie
+// przez reset i kalibracje, ale zadnej z nich nie uruchamia.
 //
 // Dodatkowo `pendingAction()` pozwala pokazac na ekranie, co sie stanie po
 // puszczeniu — uzytkownik widzi konsekwencje, zanim ja wywola.
@@ -30,11 +34,14 @@ enum class ButtonAction {
     MediumHold,
     /// Przytrzymanie ~10 s — §22.3
     LongHold,
+    /// Najdluzszy prog — konfiguracja integracji ze strona.
+    ExtraHold,
 };
 
 struct ButtonFsmConfig {
     uint32_t mediumHoldMs = 3000;
     uint32_t longHoldMs = 10000;
+    uint32_t extraHoldMs = 15000;
     /// Nacisniecia krotsze niz to sa odrzucane jako drgania styku albo
     /// przypadkowe muskniecie w rekawicy.
     uint32_t debounceMs = 40;

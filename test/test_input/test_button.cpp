@@ -56,6 +56,35 @@ void test_long_hold_never_triggers_reset_on_the_way() {
                               "Zadna akcja nie moze odpalic w trakcie trzymania");
 }
 
+/// Ta sama zasada przy czwartym progu: droga do integracji wiedzie przez reset
+/// wynikow I kalibracje, a nie moze uruchomic zadnej z nich.
+void test_integration_hold_passes_through_reset_and_calibration() {
+    ButtonFsm fsm;
+    bool early = false;
+    const ButtonAction action = holdAndRelease(fsm, 18000, early);
+
+    TEST_ASSERT_EQUAL_MESSAGE(ButtonAction::ExtraHold, action,
+                              "Najdluzsze przytrzymanie musi dac integracje");
+    TEST_ASSERT_FALSE_MESSAGE(early,
+                              "Ani reset, ani kalibracja nie moga odpalic po drodze");
+}
+
+/// Progi urzadzenia (2/4/6 s) sa krotsze niz domyslne — czwarty prog musi
+/// dzialac takze na nich, bo to one trafiaja na motocykl.
+void test_device_thresholds_reach_integration() {
+    ButtonFsmConfig config;
+    config.mediumHoldMs = 2000;
+    config.longHoldMs = 4000;
+    config.extraHoldMs = 6000;
+    ButtonFsm fsm{config};
+    bool early = false;
+
+    TEST_ASSERT_EQUAL(ButtonAction::MediumHold, holdAndRelease(fsm, 3000, early));
+    TEST_ASSERT_EQUAL(ButtonAction::LongHold, holdAndRelease(fsm, 5000, early));
+    TEST_ASSERT_EQUAL(ButtonAction::ExtraHold, holdAndRelease(fsm, 7000, early));
+    TEST_ASSERT_FALSE(early);
+}
+
 void test_bounce_is_ignored() {
     ButtonFsm fsm;
     bool early = false;
@@ -82,7 +111,13 @@ void test_pending_action_advances_through_thresholds() {
 
     fsm.update(true, now + 10500);
     TEST_ASSERT_EQUAL(ButtonAction::LongHold, fsm.pendingAction());
-    TEST_ASSERT_EQUAL(ButtonAction::None, fsm.nextAction());
+    TEST_ASSERT_EQUAL(ButtonAction::ExtraHold, fsm.nextAction());
+    TEST_ASSERT_EQUAL_UINT32(4500, fsm.msToNextThreshold());
+
+    fsm.update(true, now + 15500);
+    TEST_ASSERT_EQUAL(ButtonAction::ExtraHold, fsm.pendingAction());
+    TEST_ASSERT_EQUAL_MESSAGE(ButtonAction::None, fsm.nextAction(),
+                              "Integracja jest ostatnim progiem");
     TEST_ASSERT_EQUAL_UINT32(0, fsm.msToNextThreshold());
 }
 
@@ -103,6 +138,8 @@ int main(int, char**) {
     RUN_TEST(test_short_press_toggles_alarm);
     RUN_TEST(test_medium_hold_resets_results);
     RUN_TEST(test_long_hold_never_triggers_reset_on_the_way);
+    RUN_TEST(test_integration_hold_passes_through_reset_and_calibration);
+    RUN_TEST(test_device_thresholds_reach_integration);
     RUN_TEST(test_bounce_is_ignored);
     RUN_TEST(test_pending_action_advances_through_thresholds);
     RUN_TEST(test_release_clears_state);

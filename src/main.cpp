@@ -3,12 +3,15 @@
 // Zaimplementowane:
 //   E2  start urzadzenia, ekran startowy, BMI270, estymacja orientacji, dwa widoki
 //   E5  pamiec nieulotna: wyniki, kalibracja, stan alarmu
-//   E7  przycisk — trzy progi czasowe (§22, §23)
+//   E7  przycisk — cztery progi czasowe (§22, §23)
 //   E6  maszyna stanow zasilania — wykrywanie stacyjki, gaszenie ekranu
 //   E8  alarm: detekcja ruchu, sygnalizacja glosnikiem, light sleep w czuwaniu
+//   E3  rejestrator surowych danych IMU (wlaczany flaga MMB_RAW_LOGGER)
+//   K1-K3 wysylka wynikow: format, kolejka, ekran INTEGRACJA
 //
 // Pozostaje:
-//   E3  rejestrator surowych danych do CSV (czeka na GPS i motocykl)
+//   K4  punkt dostepowy i formularz konfiguracji na telefonie
+//   K5  klient HTTPS: laczenie z siecia domowa, harmonogram, wysylka
 //   GPS parser NMEA, predkosc do filtru i do rekordow
 
 #include <Arduino.h>
@@ -34,6 +37,7 @@
 #endif
 #include "ui/HardwareView.h"
 #include "ui/HoldPrompt.h"
+#include "ui/IntegrationView.h"
 #include "ui/LiveView.h"
 #include "ui/MainScreen.h"
 #include "ui/ScreenBuffer.h"
@@ -51,9 +55,11 @@ motion::RideClock g_rideClock;
 /// Czy biezacy przejazd trafil juz do historii — patrz archiveCurrentRide().
 bool g_rideArchived = false;
 
-/// Numeracja przejazdow i znacznik wyslania na motobix.motusy.top. Sama
+/// Numeracja przejazdow i znacznik wyslania na motobox.motusy.top. Sama
 /// wysylka jeszcze nie istnieje — kolejka rosnie i czeka na radio (K5).
 telemetry::UploadQueue g_queue;
+/// Siec domowa i token konta — wpisywane raz, przez ekran INTEGRACJA.
+telemetry::IntegrationConfig g_integration;
 
 hal::ImuSource g_imu;
 hal::Store g_store;
@@ -76,6 +82,7 @@ ui::MainScreen g_mainScreen;
 ui::LiveView g_liveView;
 ui::HardwareView g_hardwareView;
 ui::HoldPrompt g_holdPrompt;
+ui::IntegrationView g_integrationView;
 
 // ── Role przyciskow ────────────────────────────────────────────────────────
 // KEY1 jest wygodniejszy w dosiegu, wiec obsluguje czynnosc najczestsza:
@@ -87,6 +94,8 @@ ui::HoldPrompt g_holdPrompt;
 //   KEY2 (akcja)  klik: przelaczenie alarmu
 //                 2 s:  reset wynikow
 //                 4 s:  kalibracja montazu
+//                 6 s:  integracja ze strona (ostatnia pozycja — raz ustawiona
+//                       i zapomniana, wiec najdalej od codziennych akcji)
 //
 // Zmiana przypisania to podmiana tych dwoch funkcji.
 m5::Button_Class& viewButton() { return M5.BtnA; }
@@ -110,6 +119,7 @@ input::ButtonFsmConfig makeButtonConfig() {
     input::ButtonFsmConfig config;
     config.mediumHoldMs = cfg::kButtonResetHoldMs;
     config.longHoldMs = cfg::kButtonCalibrationHoldMs;
+    config.extraHoldMs = cfg::kButtonIntegrationHoldMs;
     return config;
 }
 
@@ -297,6 +307,34 @@ void runResultsReset() {
     delay(1500);
 }
 
+/// Ekran INTEGRACJA — stan konfiguracji wysylki na motobox.motusy.top.
+///
+/// Na razie tylko pokazuje, co jest ustawione. Wpisywanie danych odbedzie sie
+/// przez punkt dostepowy i formularz na telefonie (K4) — bez radia nie ma jak
+/// wprowadzic hasla ani tokena na ekranie 240x135.
+void runIntegrationScreen() {
+    char tokenMask[24];
+    telemetry::maskToken(g_integration, tokenMask, sizeof(tokenMask));
+
+    ui::IntegrationViewModel model;
+    model.ssid = g_integration.ssid;
+    model.tokenMask = tokenMask;
+    model.hasNetwork = g_integration.hasNetwork();
+    model.hasToken = g_integration.hasToken();
+    model.configured = g_integration.isComplete();
+    model.pendingUploads = static_cast<uint32_t>(g_queue.pendingCount(g_history.count()));
+    g_integrationView.draw(g_buffer, model);
+
+    // Ekran znika na klik albo sam po chwili — zeby zapomniany na wierzchu
+    // nie swiecil az do rozladowania baterii.
+    const uint32_t deadline = millis() + cfg::kIntegrationScreenMs;
+    while (millis() < deadline) {
+        M5.update();
+        if (viewButton().wasClicked() || actionButton().wasClicked()) break;
+        delay(20);
+    }
+}
+
 /// §22.1 — przelaczenie modulu alarmowego.
 void toggleAlarm() {
     g_alarmEnabled = !g_alarmEnabled;
@@ -328,6 +366,7 @@ void restoreState(bool externalPowerAtBoot) {
     g_history = state.history;
     g_rideArchived = state.rideArchived;
     g_queue.restore(state.lastRideSeq, state.sentThrough);
+    g_integration = state.integration;
 
     if (state.mountCalibrated) {
         g_mount.restore(state.mountRotation);
@@ -724,6 +763,10 @@ void handleButtons() {
             break;
         case input::ButtonAction::LongHold:
             runMountCalibration();
+            resumeAfterAction();
+            break;
+        case input::ButtonAction::ExtraHold:
+            runIntegrationScreen();
             resumeAfterAction();
             break;
         case input::ButtonAction::None:

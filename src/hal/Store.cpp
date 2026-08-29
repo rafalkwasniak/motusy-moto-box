@@ -18,6 +18,9 @@ constexpr const char* kKeyRideSeq = "seq";
 constexpr const char* kKeySent = "sent";
 constexpr const char* kKeyRideDuration = "rdur";
 constexpr const char* kKeyHistoryDuration = "hdur";
+constexpr const char* kKeySsid = "ssid";
+constexpr const char* kKeyPassword = "pass";
+constexpr const char* kKeyToken = "tok";
 
 /// Piec wartosci rekordowych, kolejnosc utrwalona przez kSchemaVersion.
 constexpr size_t kRideValuesBytes = 5 * sizeof(float);
@@ -68,6 +71,12 @@ void packVec3(uint8_t*& cursor, const motion::Vec3& v) {
     packFloat(cursor, v.z);
 }
 
+void writeIntegration(Preferences& prefs, const telemetry::IntegrationConfig& integration) {
+    prefs.putString(kKeySsid, integration.ssid);
+    prefs.putString(kKeyPassword, integration.password);
+    prefs.putString(kKeyToken, integration.token);
+}
+
 motion::Vec3 unpackVec3(const uint8_t*& cursor) {
     const float x = unpackFloat(cursor);
     const float y = unpackFloat(cursor);
@@ -96,7 +105,15 @@ LoadResult Store::load(PersistentState& out) {
         // stronie API — gdyby wrocily do jedynki, kolejne przejazdy nadpisalyby
         // te, ktore juz sa na koncie. Historia przepada, wiec nie ma juz czego
         // wysylac: znacznik wyslania dogania numeracje.
+        // USTAWIENIA INTEGRACJI TEZ PRZEZYWAJA. Sa przepisywane recznie
+        // z telefonu — kasowanie ich przy kazdej zmianie formatu wynikow
+        // byloby karaniem uzytkownika za aktualizacje firmware.
         const uint32_t lastSeq = prefs_.getUInt(kKeyRideSeq, 0);
+        telemetry::IntegrationConfig integration;
+        prefs_.getString(kKeySsid, integration.ssid, sizeof(integration.ssid));
+        prefs_.getString(kKeyPassword, integration.password, sizeof(integration.password));
+        prefs_.getString(kKeyToken, integration.token, sizeof(integration.token));
+
         prefs_.clear();
 
         if (lastSeq > 0) {
@@ -104,8 +121,14 @@ LoadResult Store::load(PersistentState& out) {
             prefs_.putUInt(kKeySent, lastSeq);
             prefs_.putUInt(kKeyVersion, kSchemaVersion);
         }
+        if (integration.hasNetwork() || integration.hasToken()) {
+            writeIntegration(prefs_, integration);
+            prefs_.putUInt(kKeyVersion, kSchemaVersion);
+        }
+
         out.lastRideSeq = lastSeq;
         out.sentThrough = lastSeq;
+        out.integration = integration;
         return LoadResult::Migrated;
     }
 
@@ -126,6 +149,10 @@ LoadResult Store::load(PersistentState& out) {
     out.lastRideSeq = prefs_.getUInt(kKeyRideSeq, 0);
     out.sentThrough = prefs_.getUInt(kKeySent, 0);
     out.rideDurationS = prefs_.getUInt(kKeyRideDuration, 0);
+
+    prefs_.getString(kKeySsid, out.integration.ssid, sizeof(out.integration.ssid));
+    prefs_.getString(kKeyPassword, out.integration.password, sizeof(out.integration.password));
+    prefs_.getString(kKeyToken, out.integration.token, sizeof(out.integration.token));
 
     {
         uint8_t historyBuffer[kHistoryBytes];
@@ -209,6 +236,13 @@ bool Store::saveUploadState(uint32_t lastRideSeq, uint32_t sentThrough) {
     if (!available_) return false;
     prefs_.putUInt(kKeyRideSeq, lastRideSeq);
     prefs_.putUInt(kKeySent, sentThrough);
+    prefs_.putUInt(kKeyVersion, kSchemaVersion);
+    return true;
+}
+
+bool Store::saveIntegration(const telemetry::IntegrationConfig& integration) {
+    if (!available_) return false;
+    writeIntegration(prefs_, integration);
     prefs_.putUInt(kKeyVersion, kSchemaVersion);
     return true;
 }
