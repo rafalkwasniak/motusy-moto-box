@@ -53,7 +53,7 @@ void test_payload_without_gps_sends_nulls() {
     TEST_ASSERT_EQUAL_STRING(
         "{\"device_id\":\"a1b2c3d4e5f6\",\"fw\":\"1.0.0\",\"calibrated\":true,\"rides\":["
         "{\"seq\":7,\"recorded_at\":null,\"duration_s\":1832,"
-        "\"lean_left_deg\":42.0,\"lean_right_deg\":38.0,"
+        "\"lean_left_deg\":42,\"lean_right_deg\":38,"
         "\"accel_g\":0.75,\"brake_g\":0.50,\"speed_kmh\":null}]}",
         out);
     TEST_ASSERT_EQUAL_UINT32(std::strlen(out), len);
@@ -70,7 +70,51 @@ void test_payload_with_gps_fills_time_and_speed() {
 
     TEST_ASSERT_TRUE(len > 0);
     TEST_ASSERT_NOT_NULL(std::strstr(out, "\"recorded_at\":1756400000"));
-    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":137.0"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":137"));
+}
+
+/// Ta sama liczba na ekranie urzadzenia i w bazie na stronie. Zaokraglenie ma
+/// jedno zrodlo (motion::roundHalfUp), wiec obie strony nie moga sie rozjechac
+/// — a strona nie zaokragla juz drugi raz wartosci raz przycietej.
+void test_lean_and_speed_are_whole_numbers() {
+    RideRecord ride = testRide(1);
+    ride.values.maxLeanLeftDeg = 25.5f;   // polowka idzie w gore
+    ride.values.maxLeanRightDeg = 25.4f;  // ponizej polowki w dol
+    ride.values.maxSpeedKmh = 137.6f;
+    char out[kMaxPayloadBytes];
+
+    TEST_ASSERT_TRUE(buildPayload(testDevice(), &ride, 1, out, sizeof(out)) > 0);
+
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"lean_left_deg\":26,"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"lean_right_deg\":25,"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":138}"));
+
+    // Sily zostaja ulamkowe: tam precyzja jest prawdziwa, bo akcelerometr
+    // mierzy bezposrednio, a ekran pokazuje dokladnie te sama wartosc.
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"accel_g\":0.75,"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"brake_g\":0.50,"));
+}
+
+/// Zero nie wystepuje w predkosci: albo cos zmierzono i jest to co najmniej
+/// 1 km/h, albo nie bylo czym mierzyc i idzie null. Odbiornik z fixem pokazuje
+/// na postoju szum 0,3-0,5 km/h — to pomiar, nie jego brak.
+void test_speed_never_reports_zero() {
+    RideRecord ride = testRide(1);
+    char out[kMaxPayloadBytes];
+
+    // Ledwie drgnelo, ale GPS to widzial.
+    ride.values.maxSpeedKmh = 0.4f;
+    TEST_ASSERT_TRUE(buildPayload(testDevice(), &ride, 1, out, sizeof(out)) > 0);
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":1}"));
+
+    ride.values.maxSpeedKmh = 1.4f;
+    TEST_ASSERT_TRUE(buildPayload(testDevice(), &ride, 1, out, sizeof(out)) > 0);
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":1}"));
+
+    // Nie bylo czym mierzyc — dopiero to jest null.
+    ride.values.maxSpeedKmh = 0.0f;
+    TEST_ASSERT_TRUE(buildPayload(testDevice(), &ride, 1, out, sizeof(out)) > 0);
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":null"));
 }
 
 void test_payload_keeps_ride_order() {
@@ -364,6 +408,8 @@ int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_payload_without_gps_sends_nulls);
     RUN_TEST(test_payload_with_gps_fills_time_and_speed);
+    RUN_TEST(test_lean_and_speed_are_whole_numbers);
+    RUN_TEST(test_speed_never_reports_zero);
     RUN_TEST(test_payload_keeps_ride_order);
     RUN_TEST(test_empty_payload_is_valid_json);
     RUN_TEST(test_full_history_fits_in_buffer);

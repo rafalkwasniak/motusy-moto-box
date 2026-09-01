@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "Rounding.h"
+
 namespace ui {
 namespace {
 
@@ -39,12 +41,17 @@ void formatValue(char* out, size_t size, float value, RowKind kind) {
         case RowKind::Degrees:
             // Przechyl w pelnych stopniach: estymacja z zyroskopu ma dokladnosc
             // rzedu 3-5 stopni, wiec czesci dziesietne bylyby fikcja.
-            std::snprintf(out, size, "%d", static_cast<int>(value + 0.5f));
+            // motion::roundHalfUp, a nie wlasne zaokraglenie — ta sama funkcja
+            // liczy wartosc wysylana do API, wiec ekran i strona nie moga
+            // pokazac dwoch roznych liczb.
+            std::snprintf(out, size, "%d", motion::roundHalfUp(value));
             break;
         case RowKind::Speed:
             // Predkosc z GPS to pomiar bezposredni, znacznie dokladniejszy niz
-            // reszta wartosci — ale pelne km/h i tak wystarcza.
-            std::snprintf(out, size, "%d", static_cast<int>(value + 0.5f));
+            // reszta wartosci — ale pelne km/h i tak wystarcza. Podloga na
+            // jedynce jest ta sama, co w przesylce do API: pomiar bliski zeru
+            // nie moze wygladac jak brak pomiaru.
+            std::snprintf(out, size, "%d", motion::roundSpeedKmh(value));
             break;
         case RowKind::Force:
             std::snprintf(out, size, "%.2f", static_cast<double>(value));

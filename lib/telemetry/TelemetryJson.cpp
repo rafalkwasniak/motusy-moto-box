@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "Rounding.h"
+
 namespace telemetry {
 namespace {
 
@@ -53,16 +55,6 @@ public:
         text(tmp);
     }
 
-    /// Pomiar, ktorego urzadzenie nie zna, idzie jako null — nie jako zero.
-    /// Prosto z ekranu: bez GPS predkosc pokazuje "---", a nie "0 km/h".
-    void numberOrNull(float value, int decimals) {
-        if (value <= 0.0f) {
-            text("null");
-            return;
-        }
-        number(value, decimals);
-    }
-
     bool ok() const { return ok_; }
 
     size_t finish() {
@@ -110,16 +102,33 @@ void writeRide(Writer& w, const RideRecord& ride) {
     w.text(",\"duration_s\":");
     w.uint32(ride.durationS);
 
+    // Przechyl i predkosc jako liczby CALKOWITE — dokladnie te, ktore widac na
+    // ekranie urzadzenia (motion::roundHalfUp liczy obie strony). Czesci
+    // dziesietne bylyby fikcja: estymacja przechylu ma dokladnosc 3-5 stopni.
+    // Wysylanie ich zmuszaloby tez strone do drugiego zaokraglenia, juz na
+    // wartosci przycietej — i przy 25,46 ekran pokazywalby 25, a panel 26.
     w.text(",\"lean_left_deg\":");
-    w.number(ride.values.maxLeanLeftDeg, 1);
+    w.uint32(static_cast<uint32_t>(motion::roundHalfUp(ride.values.maxLeanLeftDeg)));
     w.text(",\"lean_right_deg\":");
-    w.number(ride.values.maxLeanRightDeg, 1);
+    w.uint32(static_cast<uint32_t>(motion::roundHalfUp(ride.values.maxLeanRightDeg)));
+
+    // Sily zostaja ulamkowe: akcelerometr mierzy je bezposrednio, ekran tez
+    // pokazuje dwa miejsca, wiec obie strony i tak sa zgodne.
     w.text(",\"accel_g\":");
     w.number(ride.values.maxAccelG, 2);
     w.text(",\"brake_g\":");
     w.number(ride.values.maxBrakeG, 2);
+
+    // Zero nie wystepuje w tej kolumnie: albo pomiar byl i wynosi co najmniej
+    // 1 km/h, albo go nie bylo i idzie null. Podloge trzyma motion::roundSpeedKmh,
+    // wspolne z ekranem.
+    const int speedKmh = motion::roundSpeedKmh(ride.values.maxSpeedKmh);
     w.text(",\"speed_kmh\":");
-    w.numberOrNull(ride.values.maxSpeedKmh, 1);
+    if (speedKmh > 0) {
+        w.uint32(static_cast<uint32_t>(speedKmh));
+    } else {
+        w.text("null");
+    }
 
     w.text("}");
 }

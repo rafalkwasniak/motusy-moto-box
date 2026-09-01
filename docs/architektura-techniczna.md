@@ -801,3 +801,72 @@ da się policzyć. Chroni nas okno czasowe, nie sekret — sieć żyje tylko wte
 gdy właściciel stoi przy motocyklu z otwartym ekranem INTEGRACJA. Sieci bez
 hasła celowo nie stawiamy: tam każdy przechodzień podmieniłby token jednym
 kliknięciem, bez liczenia czegokolwiek.
+
+---
+
+## 16. Bramka prędkości — ustalenie na etap GPS
+
+Decyzja użytkownika z 2026-09-01, do wykonania razem z modułem GPS. Zapisana
+teraz, bo powód jest konkretny i łatwo go zgubić: **przechył motocykla przy
+2 km/h nie jest rekordem przechyłu.**
+
+### 16.1. Problem
+
+Dziś rekordy zbierane są zawsze, gdy jest kalibracja i włączony zapłon:
+
+```cpp
+if (g_mount.isCalibrated() && g_deviceState.state() == state::DeviceState::Riding) {
+    g_metrics.update(g_orientation.state());
+    g_rideClock.update(!g_orientation.state().stationary, millis());
+}
+```
+
+Ten warunek nie odróżnia jazdy od manewrowania. Dojazd do skrzyżowania,
+utrata równowagi przy 3 km/h i motocykl prawie na ziemi — to zapisze się jako
+rekord przechyłu całej sesji. Ta sama rodzina przypadków: postawienie na
+bocznej nóżce przy włączonym zapłonie, prowadzenie motocykla obok siebie,
+manewrowanie w garażu, szarpnięcie sprzęgłem przy ruszaniu.
+
+Skutek jest gorszy niż pojedyncza zła liczba: **rekord przypadkowy zawsze
+wygrywa z prawdziwym**, bo jest większy. Kolumna „maksymalny przechył" przestaje
+znaczyć cokolwiek.
+
+### 16.2. Rozwiązanie
+
+Rejestrowanie pomiarów tylko powyżej progu prędkości. Przejazd również zaczyna
+się od przekroczenia progu, nie od włączenia zapłonu.
+
+| Parametr | Wartość wyjściowa | Po co |
+|---|---|---|
+| próg włączenia | 5 km/h | poniżej tego motocykl jest manewrowany, nie prowadzony |
+| próg wyłączenia | 3 km/h | histereza — bez niej rejestracja migocze przy 4,9/5,1 km/h |
+| wybieg hamowania | 2 s | patrz niżej |
+| czas podtrzymania bez fixu | ~15 s | tunel, wiadukt, gęsta zabudowa |
+
+Progi trafiają do `config.h` — pierwsza prawdziwa jazda i tak je zweryfikuje.
+Sama bramka to czyste C++ (`motion::SpeedGate`), więc daje się przetestować
+na komputerze jak reszta algorytmów.
+
+### 16.3. Trzy pułapki, o których trzeba pamiętać przy pisaniu
+
+**Hamowanie do zera.** Awaryjne hamowanie kończy się na 0 km/h, a jego ostatnia
+faza bywa najostrzejsza — czyli bramka odcięłaby dokładnie to, co najciekawsze.
+Stąd wybieg: przez 2 s po spadku poniżej progu nadal rejestrujemy, skoro chwilę
+wcześniej jechaliśmy.
+
+**Utrata fixu nie może oznaczać „nie rejestruję nic".** Po upływie czasu
+podtrzymania wracamy do dzisiejszej reguły opartej na `stationary` z IMU.
+Awaria modułu GPS ma degradować urządzenie do stanu sprzed GPS, a nie
+wyłączać pomiary.
+
+**Prowadzenie motocykla pieszo to 4–5 km/h**, czyli okolice progu. Ratuje nas
+to, że prowadząc trzyma się kierownicę i motocykl stoi pionowo — ale gdyby
+okazało się to problemem, próg idzie w górę, nie histereza w dół.
+
+### 16.4. Jak to sprawdzić bez zgadywania
+
+Przy pierwszej prawdziwej jeździe włączyć rejestrator surowych danych
+(`MMB_RAW_LOGGER=1`, §10.3). Mając nagranie z GPS, da się policzyć offline,
+ile rekordów bramka faktycznie odcięłaby i czy 5 km/h to właściwy próg —
+zamiast dobierać go na wyczucie po fakcie. Ten sam materiał służy do strojenia
+filtrów orientacji.

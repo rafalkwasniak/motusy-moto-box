@@ -6,7 +6,8 @@ urządzenie faktycznie wysyła — format jest zaimplementowany w
 dosłowną treść JSON-a. Zmiana kształtu przesyłki psuje te testy; to celowe,
 bo taka zmiana wymaga ruszenia także drugiej strony.
 
-Wersja: 1 (2026-08-29, sekcje 7–8 dopisane 2026-08-31).
+Wersja: 2 (2026-09-01). Zmiana wobec wersji 1: **przechył i prędkość są teraz
+liczbami całkowitymi**, nie ułamkowymi — patrz sekcja 3.
 
 ---
 
@@ -73,8 +74,8 @@ opłaca się dzielić na pojedyncze żądania.
       "seq": 7,
       "recorded_at": null,
       "duration_s": 1832,
-      "lean_left_deg": 42.0,
-      "lean_right_deg": 38.0,
+      "lean_left_deg": 42,
+      "lean_right_deg": 38,
       "accel_g": 0.75,
       "brake_g": 0.50,
       "speed_kmh": null
@@ -91,16 +92,22 @@ opłaca się dzielić na pojedyncze żądania.
 | `rides[].seq` | int > 0 | numer przejazdu w urządzeniu; klucz idempotencji |
 | `rides[].recorded_at` | int lub null | unix timestamp końca przejazdu; `null` dopóki nie ma GPS |
 | `rides[].duration_s` | int | czas trwania przejazdu w sekundach |
-| `rides[].lean_left_deg` | float, 1 miejsce | maksymalny przechył w lewo |
-| `rides[].lean_right_deg` | float, 1 miejsce | maksymalny przechył w prawo |
+| `rides[].lean_left_deg` | **int** | maksymalny przechył w lewo, pełne stopnie |
+| `rides[].lean_right_deg` | **int** | maksymalny przechył w prawo, pełne stopnie |
 | `rides[].accel_g` | float, 2 miejsca | maksymalne przyspieszenie |
 | `rides[].brake_g` | float, 2 miejsca | maksymalne hamowanie |
-| `rides[].speed_kmh` | float lub null | prędkość maksymalna; `null` gdy brak GPS |
+| `rides[].speed_kmh` | **int** lub null | prędkość maksymalna, pełne km/h; `null` gdy brak GPS |
 
-`null` w `speed_kmh` znaczy „urządzenie nie umiało tego zmierzyć", a nie
-„zero" — dokładnie jak na ekranie, gdzie bez GPS pokazuje się `---`.
-Interfejs strony powinien to rozróżniać. Prędkość zero nigdy nie przyjdzie
-jako `0` — brak pomiaru i zero to dla urządzenia to samo, więc idzie `null`.
+**`speed_kmh` nigdy nie przyjdzie jako `0`.** Są tylko dwie możliwości:
+
+- **`null`** — nie było czym zmierzyć (brak modułu GPS albo brak fixu).
+  Na ekranie urządzenia widnieje wtedy `---` i strona powinna zrobić to samo.
+- **liczba ≥ 1** — pomiar był. Odbiornik z ustaloną pozycją pokazuje na postoju
+  szum rzędu 0,3–0,5 km/h; to jest pomiar, więc nie może wyglądać tak samo jak
+  jego brak. Wartości poniżej 1 km/h podnosimy do `1`.
+
+Dzięki temu kolumna prędkości ma jedno czytelne rozróżnienie: kreski znaczą
+„nie wiemy", każda liczba znaczy „wiemy".
 
 ### Przesyłka dosłownie
 
@@ -110,12 +117,36 @@ co pójdzie po kablu — ten sam ciąg znak w znak jest w
 `test/test_telemetry/test_telemetry.cpp`:
 
 ```
-{"device_id":"a1b2c3d4e5f6","fw":"1.0.0","calibrated":true,"rides":[{"seq":7,"recorded_at":null,"duration_s":1832,"lean_left_deg":42.0,"lean_right_deg":38.0,"accel_g":0.75,"brake_g":0.50,"speed_kmh":null}]}
+{"device_id":"a1b2c3d4e5f6","fw":"1.0.0","calibrated":true,"rides":[{"seq":7,"recorded_at":null,"duration_s":1832,"lean_left_deg":42,"lean_right_deg":38,"accel_g":0.75,"brake_g":0.50,"speed_kmh":null}]}
 ```
 
-Liczby zmiennoprzecinkowe mają **stałą liczbę miejsc po przecinku** (przechyły
-i prędkość 1, przyspieszenie i hamowanie 2) — również gdy końcówka to zero:
-`0.50`, nie `0.5`. Nie ma notacji wykładniczej ani `NaN`.
+Przechył i prędkość są **liczbami całkowitymi**. Przyspieszenie i hamowanie mają
+zawsze **dwa miejsca po przecinku**, również gdy końcówka to zero: `0.50`, nie
+`0.5`. Nie ma notacji wykładniczej ani `NaN`.
+
+### Dlaczego przechył jest liczbą całkowitą
+
+Bo taka wartość widnieje na ekranie urządzenia, a **jedna wielkość ma mieć jedną
+liczbę**. Gdyby urządzenie wysyłało `25.1`, a strona zaokrąglała to sama,
+w wąskim paśmie wyszłyby dwie różne odpowiedzi na to samo pytanie:
+
+| Pomiar | Ekran urządzenia | Gdyby API dostawało `%.1f` | Panel po `round()` |
+|---|---|---|---|
+| 25,46° | 25 | `25.5` | **26** ✗ |
+
+Zaokrąglenie działoby się dwa razy — drugi raz na wartości już przyciętej.
+Teraz dzieje się raz, w jednym miejscu w firmware (`motion::roundHalfUp`),
+wspólnym dla ekranu i dla przesyłki.
+
+Druga racja jest pomiarowa: estymacja przechyłu z żyroskopu ma dokładność rzędu
+**3–5 stopni**. Część dziesiętna sugerowałaby precyzję, której tam nie ma.
+
+Siły zostają ułamkowe, bo akcelerometr mierzy je bezpośrednio — `0.97 g`
+to prawdziwa wartość, a nie zaokrąglony `1 g`. Ekran pokazuje je tak samo.
+
+**Zaokrąglenie: połówki w górę** (25,5 → 26). Nie bankierskie, jak w `printf`,
+bo „24,5 daje 24, a 25,5 daje 26" jest nie do wytłumaczenia komuś, kto porównuje
+dwie liczby na ekranie.
 
 Pusta tablica `rides` jest poprawna i może się zdarzyć (urządzenie sprawdza
 łączność). Odpowiedź na taką przesyłkę to bieżący `accepted_through` konta
