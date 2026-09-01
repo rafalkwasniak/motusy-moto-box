@@ -4,6 +4,7 @@
 
 #include <cstring>
 
+#include "../assets/logo_asset.h"
 #include "PortalIdentity.h"
 
 namespace net {
@@ -22,6 +23,9 @@ body{margin:0;padding:24px 16px;background:#111418;color:#e8eaed;
 main{max-width:420px;margin:0 auto}
 h1{font-size:20px;margin:0 0 4px}
 p.sub{margin:0 0 24px;color:#9aa0a6;font-size:14px}
+/* Logo jest w skali szarosci na przezroczystym tle — na ciemnym tle strony
+   wtapia sie tak samo jak na ekranie urzadzenia. */
+img.logo{display:block;margin:0 auto 20px;width:168px;max-width:60%;height:auto}
 label{display:block;margin:16px 0 6px;font-size:14px;color:#9aa0a6}
 input,select{width:100%;box-sizing:border-box;padding:12px;border-radius:8px;
  border:1px solid #3c4043;background:#1e2126;color:#e8eaed;font-size:16px}
@@ -99,6 +103,13 @@ bool SetupPortal::begin(const char* deviceId, const telemetry::IntegrationConfig
 
     server_.on("/", HTTP_GET, [this]() { handleForm(); });
     server_.on("/zapisz", HTTP_POST, [this]() { handleSave(); });
+    // Logo jako osobny zasob, nie data: URI w tresci strony — inaczej kazde
+    // wyswietlenie formularza niosloby osiem kilobajtow base64 po WiFi.
+    server_.on("/logo.png", HTTP_GET, [this]() {
+        server_.sendHeader("Cache-Control", "max-age=86400");
+        server_.send_P(200, "image/png", reinterpret_cast<const char*>(assets::kLogoPng),
+                       assets::kLogoPngLength);
+    });
     server_.onNotFound([this]() { handleNotFound(); });
     server_.begin();
 
@@ -140,7 +151,9 @@ void SetupPortal::handleForm() {
                     "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
                     "<title>Motusy Moto Box</title>");
     page += kStyle;
-    page += F("</head><body><main><h1>Konfiguracja Moto Boxa</h1>"
+    page += F("</head><body><main>"
+              "<img class=logo src=\"/logo.png\" alt=\"Motusy Moto Box\">"
+              "<h1>Konfiguracja Moto Boxa</h1>"
               "<p class=sub>Sieć domowa i token konta ze strony motusy.top</p>"
               "<form method=post action=/zapisz>");
 
@@ -212,7 +225,8 @@ void SetupPortal::handleSave() {
                     "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
                     "<title>Motusy Moto Box</title>");
     page += kStyle;
-    page += F("</head><body><main>");
+    page += F("</head><body><main>"
+              "<img class=logo src=\"/logo.png\" alt=\"Motusy Moto Box\">");
 
     if (!problem.isEmpty()) {
         page += F("<h1 class=err>Nie zapisano</h1><p>");
