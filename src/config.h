@@ -68,8 +68,24 @@ constexpr uint32_t kButtonCalibrationHoldMs = 4000;
 /// osiagnietego w chwili puszczenia.
 constexpr uint32_t kButtonIntegrationHoldMs = 6000;
 
-/// Jak dlugo ekran INTEGRACJA czeka, zanim sam wroci do wynikow.
-constexpr uint32_t kIntegrationScreenMs = 30000;
+/// Jak dlugo ekran INTEGRACJA czeka, zanim sam wroci do wynikow. Pieć minut,
+/// bo w tym czasie uzytkownik szuka telefonu, laczy sie z siecia urzadzenia
+/// i przepisuje token — trzydziesci sekund starczyloby na samo przeczytanie
+/// hasla. Odliczanie rusza od nowa, dopoki ktos jest polaczony z formularzem.
+constexpr uint32_t kIntegrationScreenMs = 5UL * 60UL * 1000UL;
+
+// ── Integracja ze strona ───────────────────────────────────────────────────
+// Adres ustalony 2026-09-01: API stoi na glownej domenie, nie na subdomenie
+// motobox (ta nie istnieje w DNS). Certyfikat Let's Encrypt obejmuje motusy.top
+// — patrz src/net/RootCert.h.
+constexpr const char* kApiPingUrl = "https://motusy.top/api/v1/ping";
+constexpr const char* kApiRidesUrl = "https://motusy.top/api/v1/rides";
+
+/// Ile czekamy na polaczenie z siecia domowa. Router w garazu bywa daleko,
+/// ale po pietnastu sekundach kolejne czekanie to juz tylko palenie pradu.
+constexpr uint32_t kWifiConnectTimeoutMs = 15000;
+/// Timeout pojedynczego zadania HTTP.
+constexpr uint32_t kHttpTimeoutMs = 10000;
 
 // ── Alarm i dzwiek ─────────────────────────────────────────────────────────
 /// Glosnosc sygnalizacji 0-255. Wbudowany glosnik 1 W jest zaskakujaco donosny.

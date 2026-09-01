@@ -8,6 +8,7 @@
 
 #include <cstring>
 
+#include "ConfigCommand.h"
 #include "IntegrationConfig.h"
 #include "TelemetryJson.h"
 
@@ -255,6 +256,110 @@ void test_masked_token_shows_only_last_four() {
     TEST_ASSERT_EQUAL_STRING("****", mask);
 }
 
+// ── Komendy konfiguracji przez USB ─────────────────────────────────────────
+
+void test_command_sets_every_field() {
+    IntegrationConfig config;
+
+    ConfigCommandResult result = applyConfigLine(config, "SIEC=Dom Kowalskich");
+    TEST_ASSERT_TRUE(result.field == ConfigField::Ssid);
+    TEST_ASSERT_TRUE(result.accepted);
+    TEST_ASSERT_TRUE(result.needsSave);
+    TEST_ASSERT_EQUAL_STRING("Dom Kowalskich", config.ssid);
+
+    TEST_ASSERT_TRUE(applyConfigLine(config, "HASLO=tajne haslo").accepted);
+    TEST_ASSERT_EQUAL_STRING("tajne haslo", config.password);
+
+    TEST_ASSERT_TRUE(applyConfigLine(config, "TOKEN=17|abcdefghij").accepted);
+    TEST_ASSERT_EQUAL_STRING("17|abcdefghij", config.token);
+    TEST_ASSERT_TRUE(config.isComplete());
+}
+
+/// Uzytkownik pisze w monitorze portu, nie w jezyku programowania.
+void test_command_ignores_letter_case_and_key_spacing() {
+    IntegrationConfig config;
+
+    TEST_ASSERT_TRUE(applyConfigLine(config, "siec=Dom").accepted);
+    TEST_ASSERT_TRUE(applyConfigLine(config, " Token =17|abcdefghij").accepted);
+    TEST_ASSERT_EQUAL_STRING("Dom", config.ssid);
+    TEST_ASSERT_EQUAL_STRING("17|abcdefghij", config.token);
+
+    // Alias dla osob przyzwyczajonych do nazewnictwa WiFi.
+    TEST_ASSERT_TRUE(applyConfigLine(config, "SSID=Inna").accepted);
+    TEST_ASSERT_EQUAL_STRING("Inna", config.ssid);
+}
+
+/// Wartosc idzie doslownie — takze znak "=", ktory potrafi wystapic w tokenie.
+void test_command_takes_value_verbatim() {
+    IntegrationConfig config;
+
+    TEST_ASSERT_TRUE(applyConfigLine(config, "TOKEN=17|abc=def==").accepted);
+    TEST_ASSERT_EQUAL_STRING("17|abc=def==", config.token);
+
+    // Odstep za "=" jest czescia hasla, nie ozdoba skladni.
+    TEST_ASSERT_TRUE(applyConfigLine(config, "HASLO= zaczyna sie spacja").accepted);
+    TEST_ASSERT_EQUAL_STRING(" zaczyna sie spacja", config.password);
+}
+
+/// Odrzucona wartosc NIE moze zepsuc tego, co juz dziala.
+void test_command_rejects_bad_value_without_touching_config() {
+    IntegrationConfig config;
+    applyConfigLine(config, "TOKEN=17|dobrytoken");
+
+    const ConfigCommandResult result = applyConfigLine(config, "TOKEN=17|zly token");
+    TEST_ASSERT_TRUE(result.field == ConfigField::Token);
+    TEST_ASSERT_FALSE(result.accepted);
+    TEST_ASSERT_FALSE(result.needsSave);
+    TEST_ASSERT_EQUAL_STRING("17|dobrytoken", config.token);
+
+    // Pusta siec to nie jest "wyczyszczenie sieci" — do tego jest KASUJ.
+    applyConfigLine(config, "SIEC=Dom");
+    TEST_ASSERT_FALSE(applyConfigLine(config, "SIEC=").accepted);
+    TEST_ASSERT_EQUAL_STRING("Dom", config.ssid);
+}
+
+/// Puste haslo jest poprawna wartoscia — siec otwarta.
+void test_command_accepts_empty_password() {
+    IntegrationConfig config;
+    applyConfigLine(config, "HASLO=cokolwiek");
+
+    TEST_ASSERT_TRUE(applyConfigLine(config, "HASLO=").accepted);
+    TEST_ASSERT_EQUAL_STRING("", config.password);
+}
+
+void test_command_status_and_clear() {
+    IntegrationConfig config;
+    applyConfigLine(config, "SIEC=Dom");
+    applyConfigLine(config, "TOKEN=17|abcdefghij");
+
+    // STAN niczego nie zmienia i nie wymaga zapisu.
+    const ConfigCommandResult status = applyConfigLine(config, "stan");
+    TEST_ASSERT_TRUE(status.field == ConfigField::Status);
+    TEST_ASSERT_TRUE(status.accepted);
+    TEST_ASSERT_FALSE(status.needsSave);
+    TEST_ASSERT_TRUE(config.hasToken());
+
+    const ConfigCommandResult cleared = applyConfigLine(config, "KASUJ");
+    TEST_ASSERT_TRUE(cleared.field == ConfigField::Clear);
+    TEST_ASSERT_TRUE(cleared.needsSave);
+    TEST_ASSERT_FALSE(config.hasNetwork());
+    TEST_ASSERT_FALSE(config.hasToken());
+}
+
+/// Linie rejestratora (L, D<nr>, X) i smieci maja przejsc bokiem.
+void test_command_leaves_foreign_lines_alone() {
+    IntegrationConfig config;
+    applyConfigLine(config, "SIEC=Dom");
+
+    const char* foreign[] = {"", "L", "D3", "X", "cokolwiek", "=bez klucza"};
+    for (const char* line : foreign) {
+        const ConfigCommandResult result = applyConfigLine(config, line);
+        TEST_ASSERT_TRUE(result.field == ConfigField::None);
+        TEST_ASSERT_FALSE(result.needsSave);
+    }
+    TEST_ASSERT_EQUAL_STRING("Dom", config.ssid);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_payload_without_gps_sends_nulls);
@@ -277,5 +382,13 @@ int main(int, char**) {
     RUN_TEST(test_exact_length_limit_fits);
     RUN_TEST(test_token_with_whitespace_is_rejected);
     RUN_TEST(test_masked_token_shows_only_last_four);
+
+    RUN_TEST(test_command_sets_every_field);
+    RUN_TEST(test_command_ignores_letter_case_and_key_spacing);
+    RUN_TEST(test_command_takes_value_verbatim);
+    RUN_TEST(test_command_rejects_bad_value_without_touching_config);
+    RUN_TEST(test_command_accepts_empty_password);
+    RUN_TEST(test_command_status_and_clear);
+    RUN_TEST(test_command_leaves_foreign_lines_alone);
     return UNITY_END();
 }

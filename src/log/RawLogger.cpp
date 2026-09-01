@@ -210,33 +210,32 @@ void RawLogger::deleteAll(Stream& io) {
     io.printf("[log] usunieto %u plikow\n", removed);
 }
 
-void RawLogger::handleSerial(Stream& io) {
-    if (!mounted_) return;
+bool RawLogger::handleCommand(Stream& io, const char* command) {
+    if (command == nullptr) return false;
 
-    while (io.available() > 0) {
-        const char c = static_cast<char>(io.read());
-        if (c == '\r') continue;
-        if (c != '\n') {
-            if (commandLen_ + 1 < sizeof(command_)) command_[commandLen_++] = c;
-            continue;
-        }
+    const char letter = command[0];
+    if (letter != 'L' && letter != 'D' && letter != 'X') return false;
 
-        command_[commandLen_] = '\0';
-        commandLen_ = 0;
-
-        if (command_[0] == 'L') {
-            listFiles(io);
-        } else if (command_[0] == 'D') {
-            unsigned number = 0;
-            if (std::sscanf(command_ + 1, "%u", &number) == 1) {
-                dumpFile(io, number);
-            } else {
-                io.println("[log] uzycie: D<nr pliku>");
-            }
-        } else if (command_[0] == 'X') {
-            deleteAll(io);
-        }
+    // Rozpoznanie litery jest niezalezne od stanu partycji: cisza w odpowiedzi
+    // na wlasna komende wygladalaby jak zawieszone urzadzenie.
+    if (!mounted_) {
+        io.println("[log] partycja niedostepna");
+        return true;
     }
+
+    if (letter == 'L') {
+        listFiles(io);
+    } else if (letter == 'D') {
+        unsigned number = 0;
+        if (std::sscanf(command + 1, "%u", &number) == 1) {
+            dumpFile(io, number);
+        } else {
+            io.println("[log] uzycie: D<nr pliku>");
+        }
+    } else {
+        deleteAll(io);
+    }
+    return true;
 }
 
 }  // namespace rawlog

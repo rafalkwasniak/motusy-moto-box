@@ -1,4 +1,4 @@
-// Motusy Moto Box — ustawienia integracji ze strona motobox.motusy.top.
+// Motusy Moto Box — ustawienia integracji ze strona motusy.top.
 //
 // Trzy rzeczy wpisywane raz, przy uruchamianiu urzadzenia: nazwa domowej sieci,
 // jej haslo i token konta przepisany ze strony.

@@ -672,3 +672,132 @@ Ostatni wiersz jest istotny: obecność portu nie jest dowodem, że firmware wys
 Otwarcie portu domyślnie szarpie DTR, co resetuje urządzenie i unieważnia uchwyt.
 Do nasłuchu otwierać port z `dtr = False` i `rts = False` **ustawionymi przed**
 `open()`, oraz przewidzieć ponowne wpięcie po re-enumeracji.
+
+---
+
+## 14. Konfiguracja integracji przez USB
+
+Sieć domową i token konta trzeba jakoś wprowadzić do urządzenia. Docelowo robi
+to formularz na telefonie (K4), ale zanim on powstał, potrzebna była droga
+najkrótsza: użytkownik i tak siedzi przy komputerze, gdy kopiuje token ze
+strony, a monitor portu szeregowego jest otwarty przy każdym wgrywaniu.
+
+### 14.1. Komendy
+
+Wpisywane w monitorze portu (`pio device monitor`), każda zakończona enterem:
+
+| Komenda | Działanie |
+|---|---|
+| `SIEC=<nazwa>` | nazwa sieci WiFi (alias: `SSID=`) |
+| `HASLO=<hasło>` | hasło sieci; puste = sieć otwarta |
+| `TOKEN=<token>` | token konta przepisany ze strony |
+| `STAN` | pokazuje bieżące ustawienia |
+| `KASUJ` | czyści całą konfigurację |
+
+Format `KLUCZ=wartość`, a nie jednoliterowe skróty jak w rejestratorze (`L`,
+`D<nr>`, `X`): hasło WiFi może zawierać spacje, więc potrzebny jest jednoznaczny
+separator. Wielkość liter w kluczu nie ma znaczenia.
+
+### 14.2. Rozstrzygnięcia
+
+**Wartość idzie dosłownie**, razem z odstępami — `HASLO= tajne` ustawia hasło
+zaczynające się spacją. Obcinanie białych znaków dawałoby konfigurację, która
+wygląda dobrze, a nigdy się nie połączy.
+
+**Wartość odrzucona nie zmienia niczego.** Za długa, ze znakiem sterującym,
+z odstępem w tokenie — konfiguracja zostaje w poprzednim stanie, a na port idzie
+komunikat. Połowa hasła jest gorsza niż jego brak, bo wygląda jak ustawienie.
+
+**Linia dłuższa niż bufor (160 B) jest odrzucana w całości.** Obcięty token
+zapisałby się jako kompletny i dawał 401 bez żadnej wskazówki dlaczego.
+
+**Hasło i token nigdy nie są wypisywane jawnie** — `STAN` pokazuje hasło jako
+fakt („ustawione"), a token zamaskowany (`****wxyz`). Wydruk z portu bywa
+wklejany do zgłoszeń.
+
+**Jeden czytnik portu.** Linie czyta `pumpSerial()` w `main.cpp` i rozdziela:
+najpierw konfiguracja, potem — jeśli to nie jej komenda — rejestrator surowych
+danych (`RawLogger::handleCommand`). Dwa niezależne czytniki tego samego portu
+podkradałyby sobie znaki.
+
+---
+
+## 15. Konfiguracja z telefonu i wysyłka wyników
+
+Docelowa droga konfiguracji: urządzenie stawia własną sieć WiFi, właściciel
+wypełnia formularz na telefonie, urządzenie od razu sprawdza, czy token działa.
+Konfiguracja przez USB (§14) zostaje jako droga serwisowa — przydaje się, gdy
+punkt dostępowy nie wstaje.
+
+### 15.1. Przebieg
+
+1. **KEY2 przez 6 s** — ekran INTEGRACJA stawia punkt dostępowy i pokazuje trzy
+   rzeczy do przepisania: nazwę sieci `MOTOBOX-<4 znaki device_id>`, hasło
+   i adres `192.168.4.1`.
+2. Telefon łączy się z siecią; captive portal zwykle otwiera formularz sam.
+   Adres jest na ekranie, bo „zwykle" nie znaczy „zawsze" — Android z prywatnym
+   DNS potrafi przekierowanie zignorować.
+3. Formularz: sieć (lista ze skanu), hasło, token. Puste pole hasła lub tokena
+   znaczy **bez zmian** — poprawienie samej sieci nie kasuje tokena.
+4. Po zapisie punkt dostępowy gaśnie, urządzenie łączy się z siecią domową,
+   sprawdza token (`GET /api/v1/ping`) i **od razu wysyła zaległe przejazdy**.
+5. Wynik pokazuje ekran urządzenia: `INTEGRACJA OK` z liczbą wysłanych
+   przejazdów, `TOKEN ODRZUCONY`, `BRAK SIECI` albo `SERWER MILCZY`.
+
+Wynik trafia na ekran, a nie do przeglądarki, bo sprawdzenie tokena wymaga
+połączenia z siecią domową — a wtedy telefon traci łączność z urządzeniem.
+Strona po zapisie mówi o tym wprost, zamiast obiecywać wynik, którego nikt
+już nie zobaczy.
+
+### 15.2. Kiedy urządzenie wysyła samo
+
+**Tylko w oknie po zgaszeniu stacyjki** (stan Cooldown, 2 minuty). Powody:
+
+- przejazd jest właśnie skończony, więc nie ma czego mierzyć — a wysyłka
+  blokuje pętlę główną na kilkanaście sekund,
+- motocykl stoi w garażu, czyli w zasięgu sieci domowej,
+- urządzenie jeszcze nie śpi.
+
+**W czuwaniu urządzenie nie budzi się, żeby wysyłać.** Radio to ~100 mA przy
+baterii 250 mAh; dwa dni czuwania są warte więcej niż wynik dostarczony o poranek
+wcześniej. Zaległości poczekają do następnego przejazdu.
+
+### 15.3. Reakcja na błędy
+
+| Sytuacja | Reakcja |
+|---|---|
+| brak sieci, timeout, 5xx, 429, 422 | odstęp rośnie dwukrotnie: 30 s, 1 min, 2 min… do 15 minut |
+| 401/403 (token zły) | **wysyłka staje całkowicie** do zmiany konfiguracji |
+| 200 bez `accepted_through` | znacznik zostaje — przejazdy wrócą przy następnej próbie |
+
+Zatrzymanie po 401 jest istotne: bez niego źle przepisany token oznaczałby
+budzenie radia w kółko aż do rozładowania baterii, i to bez cienia szansy
+na powodzenie.
+
+Znacznik wysyłki przesuwa się **wyłącznie** na podstawie liczby od serwera.
+Odpowiedź 200 bez `accepted_through` zostawia kolejkę nietkniętą — powtórna
+wysyłka jest zawsze lepsza niż ciche skasowanie przejazdu.
+
+### 15.4. Certyfikat
+
+Wbudowany **ISRG Root X1** (Let's Encrypt), ważny do 2035. Nie przypinamy
+odcisku serwera: certyfikat Let's Encrypt wymienia się co ~60 dni, a przypięcie
+unieruchamiałoby urządzenie po każdym odnowieniu — bez możliwości naprawy
+inaczej niż kablem, w każdym urządzeniu z osobna.
+
+**Zmiana wystawcy certyfikatu na serwerze zerwie połączenie wszystkim
+urządzeniom w terenie.** Taka zmiana wymaga wcześniejszego wydania firmware
+z nowym certyfikatem.
+
+### 15.5. Hasło punktu dostępowego
+
+Wyprowadzone z `device_id`, więc **powtarzalne** — telefon łączy się
+z zapamiętanej sieci także po miesiącach. Dziesięć znaków z alfabetu bez par
+mylących się wzrokiem (bez `O` i `0`, bez `I` i `1`), bo przepisuje się je
+z ekranu 240×135.
+
+Świadomy kompromis: `device_id` jest publiczny, a firmware otwarty, więc hasło
+da się policzyć. Chroni nas okno czasowe, nie sekret — sieć żyje tylko wtedy,
+gdy właściciel stoi przy motocyklu z otwartym ekranem INTEGRACJA. Sieci bez
+hasła celowo nie stawiamy: tam każdy przechodzień podmieniłby token jednym
+kliknięciem, bez liczenia czegokolwiek.

@@ -10,7 +10,7 @@
 //     float   ax, ay, az           przyspieszenie [g], uklad urzadzenia
 //     float   gx, gy, gz           predkosc katowa [rad/s], uklad urzadzenia
 // Wszystko little-endian. Konwersja do CSV nastepuje dopiero przy zgrywaniu
-// przez USB — patrz handleSerial().
+// przez USB — patrz handleCommand().
 //
 // CYKL ZYCIA. Sesja zapisu = sesja jazdy: startuje z LOTKA, konczy sie
 // z potwierdzonym zanikiem zasilania. Kazda sesja to osobny plik /log_NNN.bin.
@@ -51,8 +51,12 @@ public:
     /// Dopisuje probke. Ignorowane poza sesja. Dekymacja do ~100 Hz w srodku.
     void log(const motion::ImuSample& sample);
 
-    /// Obsluga komend zgrywania z portu szeregowego. Wolac w petli glownej.
-    void handleSerial(Stream& io);
+    /// Wykonuje komende zgrywania (L, D<nr>, X). Linie z portu szeregowego
+    /// czyta main.cpp i rozdziela miedzy rejestrator a konfiguracje integracji —
+    /// dwa niezalezne czytniki tego samego portu podkradalyby sobie znaki.
+    ///
+    /// @return false gdy linia nie jest komenda rejestratora
+    bool handleCommand(Stream& io, const char* command);
 
     bool isMounted() const { return mounted_; }
     bool isLogging() const { return active_; }
@@ -88,9 +92,6 @@ private:
     size_t fill_ = 0;
     uint32_t lastSampleMs_ = 0;
     uint32_t lastFlushMs_ = 0;
-
-    char command_[16];
-    size_t commandLen_ = 0;
 };
 
 }  // namespace rawlog

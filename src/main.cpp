@@ -8,6 +8,7 @@
 //   E8  alarm: detekcja ruchu, sygnalizacja glosnikiem, light sleep w czuwaniu
 //   E3  rejestrator surowych danych IMU (wlaczany flaga MMB_RAW_LOGGER)
 //   K1-K3 wysylka wynikow: format, kolejka, ekran INTEGRACJA
+//   K3a konfiguracja integracji komendami przez USB (SIEC=, HASLO=, TOKEN=)
 //
 // Pozostaje:
 //   K4  punkt dostepowy i formularz konfiguracji na telefonie
@@ -22,16 +23,23 @@
 
 #include "AlarmEngine.h"
 #include "ButtonFsm.h"
+#include "ConfigCommand.h"
 #include "DeviceStateMachine.h"
+#include "PortalIdentity.h"
 #include "Orientation.h"
 #include "RideClock.h"
 #include "RideMetrics.h"
+#include "TelemetryJson.h"
 #include "UploadQueue.h"
+#include "UploadScheduler.h"
 #include "config.h"
+#include "hal/DeviceId.h"
 #include "hal/I2cScan.h"
 #include "hal/ImuSource.h"
 #include "hal/PowerSource.h"
 #include "hal/Store.h"
+#include "net/SetupPortal.h"
+#include "net/Uplink.h"
 #if MMB_RAW_LOGGER
 #include "log/RawLogger.h"
 #endif
@@ -55,10 +63,15 @@ motion::RideClock g_rideClock;
 /// Czy biezacy przejazd trafil juz do historii — patrz archiveCurrentRide().
 bool g_rideArchived = false;
 
-/// Numeracja przejazdow i znacznik wyslania na motobox.motusy.top. Sama
-/// wysylka jeszcze nie istnieje — kolejka rosnie i czeka na radio (K5).
+/// Numeracja przejazdow i znacznik wyslania na motusy.top.
 telemetry::UploadQueue g_queue;
-/// Siec domowa i token konta — wpisywane raz, przez ekran INTEGRACJA.
+/// Kiedy wolno wlaczyc radio i jak dlugo czekac po nieudanej probie.
+telemetry::UploadScheduler g_scheduler;
+
+net::Uplink g_uplink;
+net::SetupPortal g_portal;
+/// Siec domowa i token konta — wpisywane raz, komendami przez USB (K3a),
+/// docelowo przez formularz na telefonie (K4). Ekran INTEGRACJA je pokazuje.
 telemetry::IntegrationConfig g_integration;
 
 hal::ImuSource g_imu;
@@ -307,12 +320,161 @@ void runResultsReset() {
     delay(1500);
 }
 
-/// Ekran INTEGRACJA — stan konfiguracji wysylki na motobox.motusy.top.
+// ── Wysylka na motusy.top ──────────────────────────────────────────────────
+
+telemetry::UploadOutcome toOutcome(net::UplinkStatus status) {
+    switch (status) {
+        case net::UplinkStatus::Ok: return telemetry::UploadOutcome::Success;
+        case net::UplinkStatus::AuthRejected: return telemetry::UploadOutcome::AuthRejected;
+        default: return telemetry::UploadOutcome::TemporaryFailure;
+    }
+}
+
+/// Kompletuje zalegle przejazdy i wysyla je jedna przesylka.
+/// Wymaga gotowego polaczenia — laczeniem zajmuja sie wolajacy.
 ///
-/// Na razie tylko pokazuje, co jest ustawione. Wpisywanie danych odbedzie sie
-/// przez punkt dostepowy i formularz na telefonie (K4) — bez radia nie ma jak
-/// wprowadzic hasla ani tokena na ekranie 240x135.
+/// @param sentCount ile przejazdow poszlo w przesylce
+net::UplinkStatus sendPendingRides(uint32_t& sentCount) {
+    sentCount = 0;
+
+    telemetry::RideRecord rides[telemetry::kMaxRidesPerPayload];
+    const size_t count = g_queue.collect(g_history, rides, telemetry::kMaxRidesPerPayload);
+
+    telemetry::DeviceIdentity identity;
+    identity.deviceId = hal::deviceId();
+    identity.firmware = cfg::kFirmwareVersion;
+    identity.calibrated = g_mount.isCalibrated();
+
+    // Bufor statyczny, nie na stosie: cztery kilobajty w zadaniu petli glownej
+    // to prosta droga do przepelnienia stosu.
+    static char payload[telemetry::kMaxPayloadBytes];
+    const size_t length = telemetry::buildPayload(identity, rides, count, payload, sizeof(payload));
+    if (length == 0) {
+        Serial.println("[wysylka] nie udalo sie zlozyc przesylki");
+        return net::UplinkStatus::TransportError;
+    }
+
+    const net::UploadResult result = g_uplink.postRides(g_integration.token, payload);
+
+    // Znacznik przesuwamy WYLACZNIE na podstawie liczby od serwera. Odpowiedz
+    // 200 bez tej liczby zostawia kolejke nietknieta — przejazdy wroca przy
+    // nastepnej probie, a to jest zawsze lepsze niz ciche skasowanie.
+    if (result.status == net::UplinkStatus::Ok && result.hasAccepted) {
+        if (g_queue.confirmSentThrough(result.acceptedThrough)) {
+            g_store.saveUploadState(g_queue.lastSeq(), g_queue.sentThrough());
+            sentCount = static_cast<uint32_t>(count);
+        } else if (count > 0) {
+            // Serwer odpowiedzial 200, ale znacznik stoi w miejscu — przesylka
+            // poszla w prozne. Zdarza sie, gdy najstarsze przejazdy wypadly
+            // z historii, a druga strona czeka na ciaglosc od poczatku;
+            // ponawianie tego samego nic nie zmieni (patrz api-telemetria.md,
+            // "Przejazdy, ktorych urzadzenie juz nie ma").
+            Serial.printf(
+                "[wysylka] UWAGA: wyslano przejazdy %u..%u, serwer potwierdzil %u - "
+                "znacznik bez zmian\n",
+                static_cast<unsigned>(rides[0].seq), static_cast<unsigned>(rides[count - 1].seq),
+                static_cast<unsigned>(result.acceptedThrough));
+            // Cala tresc zadania na port: przy rozbieznosci miedzy urzadzeniem
+            // a serwerem to jedyny dowod, ktora strona wysyla co innego,
+            // niz obie strony sadza.
+            Serial.printf("[wysylka] tresc zadania: %s\n", payload);
+        }
+    }
+    return result.status;
+}
+
+/// Pelny cykl wysylki: radio wlaczone, przesylka, radio wylaczone.
+/// Blokuje petle glowna na kilkanascie sekund — dlatego wolane tylko wtedy,
+/// gdy nie ma czego mierzyc (patrz warunek w loop()).
+void runScheduledUpload() {
+    const size_t pending = g_queue.pendingCount(g_history.count());
+    Serial.printf("[wysylka] proba, zaleglosci: %u\n", static_cast<unsigned>(pending));
+
+    if (!g_uplink.connect(g_integration, cfg::kWifiConnectTimeoutMs)) {
+        g_uplink.disconnect();
+        g_scheduler.onOutcome(telemetry::UploadOutcome::TemporaryFailure, millis());
+        return;
+    }
+
+    uint32_t sent = 0;
+    const net::UplinkStatus status = sendPendingRides(sent);
+    g_uplink.disconnect();
+
+    g_scheduler.onOutcome(toOutcome(status), millis());
+    if (status == net::UplinkStatus::AuthRejected) {
+        Serial.println("[wysylka] token odrzucony - wysylka wstrzymana do zmiany konfiguracji");
+    }
+}
+
+/// Sprawdzenie swiezo zapisanej konfiguracji: polaczenie, token, a jesli oba
+/// dzialaja — od razu wysylka zaleglosci. To jest odpowiedz na pytanie
+/// "czy dobrze przepisalem token", zadane w chwili, gdy uzytkownik jeszcze
+/// stoi przy motocyklu z telefonem w rece.
+void verifyIntegration() {
+    drawMessage("SPRAWDZAM", g_integration.ssid, ui::color::kWaiting);
+
+    if (!g_uplink.connect(g_integration, cfg::kWifiConnectTimeoutMs)) {
+        g_uplink.disconnect();
+        drawMessage("BRAK SIECI", "SPRAWDZ NAZWE I HASLO", ui::color::kAlarm);
+        delay(3000);
+        return;
+    }
+
+    const net::UplinkStatus status = g_uplink.ping(g_integration.token);
+
+    if (status != net::UplinkStatus::Ok) {
+        g_uplink.disconnect();
+        if (status == net::UplinkStatus::AuthRejected) {
+            drawMessage("TOKEN ODRZUCONY", "SPRAWDZ TOKEN NA STRONIE", ui::color::kAlarm);
+        } else {
+            drawMessage("SERWER MILCZY", "SIEC OK, SPROBUJ POZNIEJ", ui::color::kWaiting);
+        }
+        delay(3000);
+        return;
+    }
+
+    // Skoro juz jestesmy w sieci, nie ma po co czekac na osobna okazje.
+    const size_t pendingBefore = g_queue.pendingCount(g_history.count());
+    uint32_t sent = 0;
+    const net::UplinkStatus upload = sendPendingRides(sent);
+    g_uplink.disconnect();
+    g_scheduler.onOutcome(toOutcome(upload), millis());
+
+    // Rozroznienie wazne przy pierwszym uruchomieniu: "nic nie czekalo" i
+    // "czekalo, ale serwer tego nie wzial" to dwie zupelnie rozne wiadomosci,
+    // a obie konczyly sie tym samym napisem.
+    if (pendingBefore > 0 && sent == 0) {
+        drawMessage("SERWER NIE PRZYJAL", "SPRAWDZ API", ui::color::kWaiting);
+        delay(3000);
+        return;
+    }
+
+    char detail[32];
+    if (sent > 0) {
+        std::snprintf(detail, sizeof(detail), "WYSLANO PRZEJAZDOW: %u", static_cast<unsigned>(sent));
+    } else {
+        std::snprintf(detail, sizeof(detail), "NIC DO WYSLANIA");
+    }
+    drawMessage("INTEGRACJA OK", detail, ui::color::kRiding);
+    delay(3000);
+}
+
+/// Ekran INTEGRACJA — punkt dostepowy i formularz konfiguracji (K4).
+///
+/// Wejscie tutaj stawia siec urzadzenia, wyjscie ja gasi. Ekran pokazuje
+/// nazwe sieci, haslo i adres — trzy rzeczy do przepisania do telefonu.
 void runIntegrationScreen() {
+    if (!g_portal.begin(hal::deviceId(), g_integration)) {
+        drawMessage("BLAD", "NIE UDALO SIE WLACZYC WIFI", ui::color::kAlarm);
+        delay(2500);
+        return;
+    }
+
+    // Pelna jasnosc na czas przepisywania hasla. Domyslne 160 wystarcza do
+    // czytania wynikow w ruchu, ale nie do odczytania dziesieciu znakow
+    // w garazu — a ten ekran zyje najwyzej kilka minut, wiec prad nie boli.
+    M5.Display.setBrightness(255);
+
     char tokenMask[24];
     telemetry::maskToken(g_integration, tokenMask, sizeof(tokenMask));
 
@@ -323,15 +485,177 @@ void runIntegrationScreen() {
     model.hasToken = g_integration.hasToken();
     model.configured = g_integration.isComplete();
     model.pendingUploads = static_cast<uint32_t>(g_queue.pendingCount(g_history.count()));
-    g_integrationView.draw(g_buffer, model);
+    model.portalRunning = true;
+    model.apSsid = g_portal.apSsid();
+    model.apPassword = g_portal.apPassword();
 
-    // Ekran znika na klik albo sam po chwili — zeby zapomniany na wierzchu
-    // nie swiecil az do rozladowania baterii.
-    const uint32_t deadline = millis() + cfg::kIntegrationScreenMs;
-    while (millis() < deadline) {
+    bool submitted = false;
+    uint32_t deadline = millis() + cfg::kIntegrationScreenMs;
+    uint32_t lastDraw = 0;
+
+    while (static_cast<int32_t>(deadline - millis()) > 0) {
         M5.update();
         if (viewButton().wasClicked() || actionButton().wasClicked()) break;
-        delay(20);
+
+        if (g_portal.handle() == net::PortalEvent::Submitted) {
+            submitted = true;
+            // Chwila na dociagniecie strony z potwierdzeniem, zanim punkt
+            // dostepowy zniknie telefonowi sprzed nosa.
+            const uint32_t until = millis() + 1200;
+            while (static_cast<int32_t>(until - millis()) > 0) {
+                g_portal.handle();
+                delay(10);
+            }
+            break;
+        }
+
+        const uint8_t clients = g_portal.clientCount();
+        // Dopoki ktos jest przy formularzu, odliczanie rusza od nowa —
+        // wpisywanie tokena na telefonie potrafi trwac.
+        if (clients > 0) deadline = millis() + cfg::kIntegrationScreenMs;
+
+        const uint32_t nowMs = millis();
+        if (nowMs - lastDraw >= cfg::kDisplayRefreshMs) {
+            lastDraw = nowMs;
+            model.clients = clients;
+            g_integrationView.draw(g_buffer, model);
+        }
+        delay(5);
+    }
+
+    const telemetry::IntegrationConfig next = g_portal.submitted();
+    g_portal.end();
+    M5.Display.setBrightness(cfg::kDisplayBrightness);
+
+    if (!submitted) return;
+
+    g_integration = next;
+    const bool saved = g_store.saveIntegration(g_integration);
+    // Nowa konfiguracja zdejmuje blokade po odmowie tokena — uzytkownik
+    // wlasnie zrobil jedyna rzecz, ktora mogla pomoc.
+    g_scheduler.onConfigChanged();
+
+    if (!saved) {
+        drawMessage("BLAD ZAPISU", "USTAWIENIA NIE PRZEZYJA RESTARTU", ui::color::kAlarm);
+        delay(3000);
+        return;
+    }
+
+    verifyIntegration();
+}
+
+// ── Konfiguracja integracji przez USB ──────────────────────────────────────
+// Jedyne miejsce w firmware czytajace port szeregowy. Linie ida najpierw do
+// konfiguracji, potem — jesli to nie jej komenda — do rejestratora surowych
+// danych. Dwa niezalezne czytniki podkradalyby sobie znaki.
+
+/// Token (do 128 znakow) plus nazwa klucza, z zapasem.
+constexpr size_t kSerialLineMax = 160;
+char g_serialLine[kSerialLineMax + 1];
+size_t g_serialLen = 0;
+/// Linia dluzsza niz bufor jest odrzucana W CALOSCI. Obcieta polowa tokena
+/// zapisalaby sie jako token kompletny i wygladala na poprawna konfiguracje,
+/// a serwer odpowiadalby na nia 401 bez zadnej wskazowki dlaczego.
+bool g_serialTooLong = false;
+
+/// Definicja nizej, przy obsludze przyciskow — komenda TEST konczy sie tak
+/// samo jak akcja z ekranu: dluga przerwa, po ktorej pomiar czasu musi ruszyc
+/// od zera.
+void resumeAfterAction();
+
+void printConfigHelp(Stream& io) {
+    io.println("[konfig] SIEC=<nazwa>  HASLO=<haslo>  TOKEN=<token konta>  STAN  TEST  KASUJ");
+}
+
+/// Stan konfiguracji BEZ sekretow: haslo tylko jako fakt, token zamaskowany.
+/// Wystarczy do odpowiedzi na pytanie "czy to ten token", a wydruk z portu
+/// szeregowego bywa wklejany do zgloszen.
+void printIntegrationStatus(Stream& io) {
+    char tokenMask[24];
+    telemetry::maskToken(g_integration, tokenMask, sizeof(tokenMask));
+
+    io.printf("[konfig] siec: %s | haslo: %s | token: %s | komplet: %s\n",
+              g_integration.hasNetwork() ? g_integration.ssid : "BRAK",
+              g_integration.password[0] != '\0' ? "ustawione" : "brak (siec otwarta)",
+              tokenMask, g_integration.isComplete() ? "tak" : "nie");
+
+    // Stan kolejki obok konfiguracji: bez tego "wyslalo sie czy nie" trzeba
+    // zgadywac z ekranu SPRZET, a przy diagnostyce wysylki to pierwsza rzecz,
+    // o ktora sie pyta.
+    io.printf("[konfig] kolejka: zaleglosci %u | ostatni przejazd %u | wyslane do %u\n",
+              static_cast<unsigned>(g_queue.pendingCount(g_history.count())),
+              static_cast<unsigned>(g_queue.lastSeq()),
+              static_cast<unsigned>(g_queue.sentThrough()));
+}
+
+void handleSerialLine(Stream& io, const char* line) {
+    const telemetry::ConfigCommandResult result =
+        telemetry::applyConfigLine(g_integration, line);
+
+    if (result.field == telemetry::ConfigField::None) {
+        if (line[0] == '\0') return;
+#if MMB_RAW_LOGGER
+        if (g_logger.handleCommand(io, line)) return;
+#endif
+        printConfigHelp(io);
+        return;
+    }
+
+    if (!result.accepted) {
+        // Konfiguracja zostaje bez zmian — mowimy o tym wprost, bo to jedyna
+        // roznica miedzy "wpisalem" a "urzadzenie to przyjelo".
+        io.printf("[konfig] %s: wartosc odrzucona, bez zmian\n",
+                  telemetry::configFieldName(result.field));
+        return;
+    }
+
+    if (result.needsSave && !g_store.saveIntegration(g_integration)) {
+        io.println("[konfig] BLAD ZAPISU - ustawienie nie przezyje restartu");
+        return;
+    }
+
+    if (result.field == telemetry::ConfigField::Verify) {
+        if (!g_integration.isComplete()) {
+            io.println("[konfig] brak kompletu - najpierw SIEC i TOKEN");
+            return;
+        }
+        verifyIntegration();
+        resumeAfterAction();
+        return;
+    }
+
+    if (result.field == telemetry::ConfigField::Clear) {
+        io.println("[konfig] konfiguracja skasowana");
+    }
+    printIntegrationStatus(io);
+}
+
+void pumpSerial(Stream& io) {
+    while (io.available() > 0) {
+        const char c = static_cast<char>(io.read());
+
+        // Koniec linii to CR ALBO LF: terminale wysylaja po enterze rozne
+        // rzeczy (miniterm CRLF, screen samo CR). Pusta linia z drugiej polowy
+        // CRLF nic nie robi, wiec obsluga obu znakow jest darmowa.
+        if (c != '\n' && c != '\r') {
+            if (g_serialLen < kSerialLineMax) {
+                g_serialLine[g_serialLen++] = c;
+            } else {
+                g_serialTooLong = true;
+            }
+            continue;
+        }
+
+        g_serialLine[g_serialLen] = '\0';
+        const bool tooLong = g_serialTooLong;
+        g_serialLen = 0;
+        g_serialTooLong = false;
+
+        if (tooLong) {
+            io.println("[konfig] linia za dluga - odrzucona w calosci");
+            continue;
+        }
+        handleSerialLine(io, g_serialLine);
     }
 }
 
@@ -850,6 +1174,21 @@ void setup() {
     Serial.printf("RAM wolne: %u B, PSRAM wolne: %u B\n",
                   static_cast<unsigned>(ESP.getFreeHeap()),
                   static_cast<unsigned>(ESP.getFreePsram()));
+
+    // Stan integracji przy kazdym starcie: to jedyne ustawienie, ktore
+    // uzytkownik wpisuje recznie, wiec ma byc widoczne bez pytania o nie.
+    printIntegrationStatus(Serial);
+    printConfigHelp(Serial);
+
+    // Nazwa i haslo sieci konfiguracyjnej sa wyprowadzone z device_id, wiec
+    // znane juz przy starcie — wypisanie ich tutaj oszczedza wchodzenie
+    // w ekran INTEGRACJA tylko po to, zeby je odczytac.
+    char apSsid[16];
+    char apPassword[16];
+    telemetry::portalSsid(hal::deviceId(), apSsid, sizeof(apSsid));
+    telemetry::portalPassword(hal::deviceId(), apPassword, sizeof(apPassword));
+    Serial.printf("[konfig] device_id: %s | konfiguracja z telefonu: siec \"%s\", haslo \"%s\"\n",
+                  hal::deviceId(), apSsid, apPassword);
 }
 
 /// Reakcja na przejscia maszyny stanow (§17, §21, §26).
@@ -966,6 +1305,20 @@ void loop() {
     handleStateEvent(g_deviceState.update(externalPower, g_alarmEnabled,
                                           alarmOut.violation, nowMs));
 
+    // ── Wysylka wynikow na strone ──────────────────────────────────────────
+    // Radio wolno wlaczyc TYLKO w oknie po zgaszeniu stacyjki. Wtedy przejazd
+    // jest skonczony (nie ma czego mierzyc, a wysylka blokuje petle na
+    // kilkanascie sekund), motocykl stoi w garazu w zasiegu sieci domowej,
+    // a urzadzenie jeszcze nie zasnelo. W czuwaniu nie budzimy sie po to,
+    // zeby wysylac — dwa dni czuwania sa wazniejsze.
+    const bool radioAllowed = g_deviceState.state() == state::DeviceState::Cooldown;
+    if (g_scheduler.shouldAttempt(g_integration.isComplete(),
+                                  g_queue.pendingCount(g_history.count()) > 0, radioAllowed,
+                                  nowMs)) {
+        runScheduledUpload();
+        resumeAfterAction();
+    }
+
 #ifdef MMB_BENCH
     static uint32_t benchLastMs = 0;
     if (nowMs - benchLastMs >= 1000) {
@@ -983,9 +1336,7 @@ void loop() {
 
     saveResultsIfDirty(false);
 
-#if MMB_RAW_LOGGER
-    g_logger.handleSerial(Serial);
-#endif
+    pumpSerial(Serial);
 
     if (g_screenOn && nowMs - g_lastDisplayMs >= cfg::kDisplayRefreshMs) {
         g_lastDisplayMs = nowMs;
