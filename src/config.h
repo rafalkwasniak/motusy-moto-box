@@ -107,6 +107,25 @@ constexpr uint32_t kImuSampleIntervalMs = 10;
 /// Odswiezanie ekranu. Rzadziej niz IMU, zeby nie kradlo czasu probkowaniu.
 constexpr uint32_t kDisplayRefreshMs = 100;
 
+// ── Modul GPS (Grove Port A) ───────────────────────────────────────────────
+// Architektura §2.5. Piny i predkosc transmisji to WARTOSCI WYJSCIOWE, nie
+// pewniki: kolejnosc zyl w kablu Grove i fabryczne ustawienie modulu
+// rozstrzyga sie dopiero na sprzecie, wiec hal::GpsSource sprawdza po kolei
+// obie kolejnosci pinow i obie predkosci.
+/// Grove Port A na StickS3: SCL=G10, SDA=G9 (tabela pinow w M5Unified).
+/// Lista sprawdzanych predkosci transmisji siedzi w hal/GpsSource.cpp — jest
+/// czescia procedury dobierania portu, nie ustawieniem do strojenia.
+constexpr int kGpsRxPin = 10;
+constexpr int kGpsTxPin = 9;
+/// Dwie sekundy na probe = dwie szanse przy nadawaniu 1 Hz.
+constexpr uint32_t kGpsProbeMs = 2000;
+/// Ile fix pozostaje wazny bez potwierdzenia. Krotki tunel nie moze kasowac
+/// predkosci z ekranu, ale dziesiec sekund starych danych to juz zmyslanie.
+constexpr uint32_t kGpsFixMaxAgeMs = 5000;
+/// Progi jakosci fixa — ponizej nich predkosc nie jest pomiarem (§3a).
+constexpr uint8_t kGpsMinSatellites = 4;
+constexpr float kGpsMaxHdop = 5.0f;
+
 // ── Pamiec nieulotna ───────────────────────────────────────────────────────
 /// Odstep miedzy automatycznymi zapisami wynikow. Zapis przy kazdym nowym
 /// rekordzie zajechalby flash — patrz architektura §6.2.

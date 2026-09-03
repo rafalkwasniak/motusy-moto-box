@@ -56,7 +56,34 @@ void HardwareView::draw(ScreenBuffer& buffer, const HardwareViewModel& model) {
         gfx->drawString(device.present ? "OK" : "BRAK", layout::kContentLeft + 114, y);
     }
 
+    // Modul GPS wisi na UART-cie, wiec skan I2C go nie zobaczy — ma wlasna
+    // linie. Cztery stany, bo cztery rozne rzeczy trzeba umiec odroznic:
+    // wylaczony, szukajacy ustawien portu, gadajacy bez fixa, gotowy.
     gfx->setTextDatum(middle_left);
+    if (!model.gpsPowered) {
+        gfx->setTextColor(color::kMuted);
+        std::snprintf(text, sizeof(text), "GPS: zasilanie wyl. (poza jazda)");
+    } else if (!model.gpsReceiving) {
+        // Rosnaca liczba odrzuconych zdan to dowod, ze cos przychodzi, tylko
+        // z inna predkoscia transmisji — cisza dawalaby tu zera.
+        gfx->setTextColor(color::kAlarm);
+        std::snprintf(text, sizeof(text), "GPS: SZUKAM %lubd RX%d odrz:%lu",
+                      static_cast<unsigned long>(model.gpsBaud), model.gpsRxPin,
+                      static_cast<unsigned long>(model.gpsRejectedSentences));
+    } else if (!model.gpsFix) {
+        gfx->setTextColor(color::kWaiting);
+        std::snprintf(text, sizeof(text), "GPS: bez fixa sat:%u zdan:%lu",
+                      static_cast<unsigned>(model.gpsSatellites),
+                      static_cast<unsigned long>(model.gpsValidSentences));
+    } else {
+        gfx->setTextColor(color::kRiding);
+        std::snprintf(text, sizeof(text), "GPS FIX sat:%u hdop:%.1f %.0f km/h",
+                      static_cast<unsigned>(model.gpsSatellites),
+                      static_cast<double>(model.gpsHdop),
+                      static_cast<double>(model.gpsSpeedKmh));
+    }
+    gfx->drawString(text, layout::kContentLeft, kGpsY);
+
     gfx->setTextColor(color::kMuted);
     if (scan.unknownCount() > 0) {
         int written = std::snprintf(text, sizeof(text), "NIEZNANE:");

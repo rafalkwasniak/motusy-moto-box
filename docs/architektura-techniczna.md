@@ -173,7 +173,7 @@ prędkości do gotowego wejścia, bez zmian w algorytmie.
 | Parametr | Wartość | Znaczenie dla projektu |
 |---|---|---|
 | Chipset | AT6668 + MAX2659 | GPS, BDS, GLONASS, GALILEO, QZSS |
-| Interfejs | UART, NMEA 0183 4.1 | Grove Port A (G9/G10) — **wolny** |
+| Interfejs | UART, NMEA 0183 4.1 | Grove Port A — **RX = G10, 115200 baud** (zmierzone) |
 | Odświeżanie | 1–10 Hz | prędkość wolniejsza niż IMU (100 Hz) — stąd korekcja, nie zastąpienie |
 | Dokładność pozycji | 1,5 m | prędkość dopplerowska jest dokładniejsza niż z różniczkowania pozycji |
 | Pobór | ~32 mA @5 V | **tylko w trybie jazdy**; w trybie alarmowym musi być odcięty |
@@ -188,6 +188,28 @@ Wymagania wynikające z powyższego:
 - **Zasilanie GPS musi być odcinane** przed wejściem w deep sleep, inaczej 32 mA
   zabije baterię w ~8 godzin i alarm nie doczeka rana.
 - Port A zajęty — kolejne moduły tylko przez Hat2-Bus.
+
+#### Wynik pierwszego uruchomienia z modułem (2026-09-03)
+
+Egzemplarz z anteną zewnętrzną (SMA). Dwie rzeczy wyszły **inaczej, niż podaje
+dokumentacja**, i obie kosztowałyby godzinę zgadywania, gdyby nie mierzyć:
+
+| | dokumentacja | sprzęt |
+|---|---|---|
+| prędkość transmisji | 9600 | **115200** |
+| pin odbiorczy | — | **G10** (linia SCL Grove) |
+
+Stąd `hal::GpsSource` nie zakłada ustawień, tylko je **dobiera**: przechodzi po
+kolei sześć prędkości transmisji razy dwie kolejności pinów i zostaje przy tej
+kombinacji, na której przyszło zdanie z poprawną sumą kontrolną. Lista zaczyna
+się od zmierzonych 115200, więc w praktyce blokuje się na pierwszej próbie —
+reszta jest siatką bezpieczeństwa na inny egzemplarz albo moduł przestawiony
+komendą. Nieudana próba raportuje na port USB liczbę odebranych bajtów, bo to
+ona rozróżnia dwie zupełnie różne awarie: *bajty bez zdań* = zła prędkość
+transmisji, *zero bajtów* = zły pin, brak zasilania albo odłączony kabel.
+
+Moduł łapie fix **wewnątrz budynku**: 14 satelitów, HDOP 1,6, `ANTENNA OK`
+w `$GPTXT`. Nadaje 1 Hz, komplet GNSS (GPS, GLONASS, BeiDou, Galileo, QZSS).
 
 ---
 

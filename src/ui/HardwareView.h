@@ -44,6 +44,23 @@ struct HardwareViewModel {
     /// od czasu jej wylaczenia (docs §4) zawsze pokazywala zero.
     uint32_t pendingUploads = 0;
     uint32_t lastRideSeq = 0;
+
+    // ── Modul GPS ──────────────────────────────────────────────────────────
+    // GPS nie siedzi na I2C, wiec nie pokaze go skan magistrali. Ta linia jest
+    // jedynym miejscem, w ktorym widac, czy modul odpowiada i czy ma fix.
+    /// Wyjscie 5 V na Grove wlaczone (tylko przy wlaczonej stacyjce).
+    bool gpsPowered = false;
+    /// Przychodza zdania z poprawna suma kontrolna — ustawienia UART-u dobrane.
+    bool gpsReceiving = false;
+    bool gpsFix = false;
+    uint32_t gpsBaud = 0;
+    int gpsRxPin = 0;
+    uint8_t gpsSatellites = 0;
+    float gpsHdop = 0.0f;
+    float gpsSpeedKmh = 0.0f;
+    /// Zdania poprawne / odrzucone. Same odrzucone = zla predkosc transmisji.
+    uint32_t gpsValidSentences = 0;
+    uint32_t gpsRejectedSentences = 0;
 };
 
 class HardwareView {
@@ -54,6 +71,7 @@ private:
     static constexpr int kHeaderY = 8;
     static constexpr int kListTop = 26;
     static constexpr int kListStep = 13;
+    static constexpr int kGpsY = 79;
     static constexpr int kUnknownY = 92;
     static constexpr int kPowerY = 104;
     static constexpr int kAlarmY = 116;

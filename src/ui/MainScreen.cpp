@@ -151,11 +151,18 @@ void MainScreen::drawRows(m5gfx::LovyanGFX* gfx, const MainScreenModel& model) {
         // Bez modulu GPS wiersz predkosci nie ma czego pokazac; pusty slot
         // historii nie ma czego pokazac w ogole. Kreski zamiast zera, bo
         // "0 km/h" wygladaloby jak zmierzony wynik.
-        const bool speedUnavailable = row.kind == RowKind::Speed && !model.speedAvailable;
+        const bool speedRow = row.kind == RowKind::Speed;
+        const bool speedUnavailable = speedRow && !model.speedAvailable;
 
         char text[12];
 
-        if (!model.leftPresent || speedUnavailable) {
+        // Zero w predkosci znaczy "nie bylo czym zmierzyc" (motion::Rounding.h:
+        // podloga wyniku to 1 km/h), wiec takze przy dzialajacym GPS-ie idzie
+        // jako kreski. Pozostale cztery wartosci pokazuja zero jako zero.
+        const bool leftEmpty = speedUnavailable || (speedRow && model.overall.*(row.field) <= 0.0f);
+        const bool rightEmpty = speedUnavailable || (speedRow && model.ride.*(row.field) <= 0.0f);
+
+        if (!model.leftPresent || leftEmpty) {
             drawValue(gfx, layout::kOverallRightX, centerY, "---", nullptr, false, color::kZero);
         } else {
             const float value = model.overall.*(row.field);
@@ -165,7 +172,7 @@ void MainScreen::drawRows(m5gfx::LovyanGFX* gfx, const MainScreenModel& model) {
                       value > 0.0f ? row.accent : color::kZero);
         }
 
-        if (!model.rightPresent || speedUnavailable) {
+        if (!model.rightPresent || rightEmpty) {
             drawValue(gfx, layout::kRideRightX, centerY, "---", nullptr, false, color::kZero);
         } else {
             const float value = model.ride.*(row.field);

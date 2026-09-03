@@ -9,11 +9,12 @@
 //   E3  rejestrator surowych danych IMU (wlaczany flaga MMB_RAW_LOGGER)
 //   K1-K3 wysylka wynikow: format, kolejka, ekran INTEGRACJA
 //   K3a konfiguracja integracji komendami przez USB (SIEC=, HASLO=, TOKEN=)
-//
-// Pozostaje:
 //   K4  punkt dostepowy i formularz konfiguracji na telefonie
 //   K5  klient HTTPS: laczenie z siecia domowa, harmonogram, wysylka
-//   GPS parser NMEA, predkosc do filtru i do rekordow
+//   GPS parser NMEA, predkosc maksymalna do wynikow i do filtru orientacji
+//
+// Pozostaje:
+//   bramka predkosci (§16), znacznik czasu przejazdu z GPS, slad trasy (GPX)
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -34,6 +35,7 @@
 #include "UploadScheduler.h"
 #include "config.h"
 #include "hal/DeviceId.h"
+#include "hal/GpsSource.h"
 #include "hal/I2cScan.h"
 #include "hal/ImuSource.h"
 #include "hal/PowerSource.h"
@@ -77,6 +79,19 @@ telemetry::IntegrationConfig g_integration;
 hal::ImuSource g_imu;
 hal::Store g_store;
 hal::I2cScan g_i2c;
+
+hal::GpsSourceConfig makeGpsConfig() {
+    hal::GpsSourceConfig config;
+    config.rxPin = cfg::kGpsRxPin;
+    config.txPin = cfg::kGpsTxPin;
+    config.probeMs = cfg::kGpsProbeMs;
+    config.fixMaxAgeMs = cfg::kGpsFixMaxAgeMs;
+    config.quality.minSatellites = cfg::kGpsMinSatellites;
+    config.quality.maxHdop = cfg::kGpsMaxHdop;
+    return config;
+}
+
+hal::GpsSource g_gps{makeGpsConfig()};
 
 hal::PowerSourceConfig makePowerConfig() {
     hal::PowerSourceConfig config;
@@ -565,6 +580,22 @@ void resumeAfterAction();
 
 void printConfigHelp(Stream& io) {
     io.println("[konfig] SIEC=<nazwa>  HASLO=<haslo>  TOKEN=<token konta>  STAN  TEST  KASUJ");
+    io.println("[gps]    GPS - stan modulu | GPS SUROWE - podglad zdan NMEA");
+}
+
+/// Stan modulu GPS jedna linia. Pierwsza rzecz, o ktora sie pyta przy
+/// "predkosc pokazuje kreski".
+void printGpsStatus(Stream& io) {
+    const uint32_t nowMs = millis();
+    io.printf("[gps] zasilanie: %s | port: %lu baud RX=G%d | zdania: %lu ok / %lu odrzucone\n",
+              g_gps.isPowered() ? "wl" : "wyl (poza jazda)",
+              static_cast<unsigned long>(g_gps.baud()), g_gps.rxPin(),
+              static_cast<unsigned long>(g_gps.validSentences()),
+              static_cast<unsigned long>(g_gps.rejectedSentences()));
+    io.printf("[gps] modul odpowiada: %s | fix: %s | satelity: %u | hdop: %.1f | predkosc: %.1f km/h\n",
+              g_gps.isReceiving() ? "tak" : "NIE",
+              g_gps.hasFix(nowMs) ? "tak" : "nie", static_cast<unsigned>(g_gps.satellites()),
+              static_cast<double>(g_gps.hdop()), static_cast<double>(g_gps.lastSpeedKmh()));
 }
 
 /// Stan konfiguracji BEZ sekretow: haslo tylko jako fakt, token zamaskowany.
@@ -588,12 +619,39 @@ void printIntegrationStatus(Stream& io) {
               static_cast<unsigned>(g_queue.sentThrough()));
 }
 
+/// Porownanie komendy bez rozroznienia wielkosci liter — te same zasady, co
+/// w telemetry::applyConfigLine, zeby "gps" i "GPS" znaczyly to samo.
+bool commandEquals(const char* line, const char* pattern) {
+    for (; *line != '\0' && *pattern != '\0'; ++line, ++pattern) {
+        const char c =
+            (*line >= 'a' && *line <= 'z') ? static_cast<char>(*line - 'a' + 'A') : *line;
+        if (c != *pattern) return false;
+    }
+    return *line == '\0' && *pattern == '\0';
+}
+
 void handleSerialLine(Stream& io, const char* line) {
     const telemetry::ConfigCommandResult result =
         telemetry::applyConfigLine(g_integration, line);
 
     if (result.field == telemetry::ConfigField::None) {
         if (line[0] == '\0') return;
+
+        if (commandEquals(line, "GPS")) {
+            printGpsStatus(io);
+            return;
+        }
+
+        // Podglad surowych zdan: jedyne narzedzie, ktore odpowiada na pytanie
+        // "czy modul w ogole cokolwiek mowi", gdy parser milczy.
+        if (commandEquals(line, "GPS SUROWE")) {
+            const bool on = !g_gps.isEchoing();
+            g_gps.setEcho(on ? &io : nullptr);
+            io.printf("[gps] podglad surowych zdan: %s\n",
+                      on ? "WLACZONY (ta sama komenda wylacza)" : "wylaczony");
+            return;
+        }
+
 #if MMB_RAW_LOGGER
         if (g_logger.handleCommand(io, line)) return;
 #endif
@@ -801,6 +859,61 @@ void pumpImu() {
     }
 }
 
+/// Odczyt modulu GPS. Wolany w kazdej iteracji petli — zdania przychodza raz
+/// na sekunde, ale bufor UART-u ma 256 bajtow, a jedna sekunda ruchu przy
+/// 9600 baud to ~600 bajtow. Rzadsze zagladanie gubiloby zdania.
+void pumpGps(uint32_t nowMs) {
+    // Zasilanie modulu tylko przy wlaczonej stacyjce (§2.5): 32 mA w czuwaniu
+    // zabiloby baterie przed rankiem, a stojacy motocykl nie ma predkosci,
+    // ktora warto by mierzyc.
+    g_gps.setPower(g_deviceState.state() == state::DeviceState::Riding, nowMs);
+
+    // Nowa probka pojawia sie dopiero wraz ze zdaniem RMC — to ono niesie
+    // status fixa i predkosc.
+    const bool newSample = g_gps.update(nowMs);
+
+    // Nieudana proba mowi wiecej niz cisza: bajty bez zdan to zla predkosc
+    // transmisji, a zero bajtow to zly pin albo brak zasilania modulu.
+    hal::GpsProbeReport probe;
+    if (g_gps.takeProbeReport(probe)) {
+        Serial.printf("[gps] proba %lu baud RX=G%d: %lu bajtow, zdania %lu ok / %lu odrzucone\n",
+                      static_cast<unsigned long>(probe.baud), probe.rxPin,
+                      static_cast<unsigned long>(probe.bytes),
+                      static_cast<unsigned long>(probe.validSentences),
+                      static_cast<unsigned long>(probe.rejectedSentences));
+    }
+
+    // Dobranie (albo utrata) ustawien portu to zdarzenie rzadkie i wazne przy
+    // pierwszym uruchomieniu z modulem — niech zostawi slad na porcie USB.
+    static bool receivingReported = false;
+    if (g_gps.isReceiving() != receivingReported) {
+        receivingReported = g_gps.isReceiving();
+        if (receivingReported) {
+            Serial.printf("[gps] modul odpowiada: %lu baud, RX=G%d\n",
+                          static_cast<unsigned long>(g_gps.baud()), g_gps.rxPin());
+        } else {
+            Serial.println("[gps] modul zamilkl - wracam do szukania ustawien portu");
+        }
+    }
+
+    if (!newSample) return;
+
+    const motion::SpeedSample sample = g_gps.speed(nowMs);
+    if (!sample.valid) return;
+
+    // Korekcja przechylu z ustalonego zakretu (§2.4). Filtr ma to wejscie
+    // gotowe od poczatku — GPS wlasnie je wypelnia. Predkosc w m/s.
+    g_orientation.setSpeedHint(sample.kmh / 3.6f, nowMs);
+
+    // Rekord predkosci zbieramy w tym samym oknie co reszte wynikow: wylacznie
+    // przy wlaczonej stacyjce (§17, §18). Kalibracji montazu tu CELOWO nie
+    // wymagamy — inaczej niz przechyl, predkosc z GPS nie zalezy od ukladu
+    // odniesienia urzadzenia, wiec brak kalibracji nie ma powodu jej blokowac.
+    if (g_deviceState.state() == state::DeviceState::Riding) {
+        g_metrics.updateSpeed(sample);
+    }
+}
+
 void refreshDisplay() {
     // Ekran wyboru akcji dopiero po chwili trzymania. Przy krotkim nacisnieciu
     // mignalby na ulamek sekundy i tylko przeszkadzal — akcja i tak wykonuje sie
@@ -838,8 +951,7 @@ void refreshDisplay() {
         model.alarmEnabled = g_alarmEnabled;
         model.externalPower = g_power.isExternal();
         model.batteryPercent = M5.Power.getBatteryLevel();
-        // TODO(GPS): wspolna flaga z ekranem glownym.
-        model.speedAvailable = false;
+        model.speedAvailable = g_gps.hasFix(millis());
         g_mainScreen.draw(g_buffer, model);
         return;
     }
@@ -874,6 +986,16 @@ void refreshDisplay() {
         model.freeHeapBytes = ESP.getFreeHeap();
         model.pendingUploads = static_cast<uint32_t>(g_queue.pendingCount(g_history.count()));
         model.lastRideSeq = g_queue.lastSeq();
+        model.gpsPowered = g_gps.isPowered();
+        model.gpsReceiving = g_gps.isReceiving();
+        model.gpsFix = g_gps.hasFix(millis());
+        model.gpsBaud = g_gps.baud();
+        model.gpsRxPin = g_gps.rxPin();
+        model.gpsSatellites = g_gps.satellites();
+        model.gpsHdop = g_gps.hdop();
+        model.gpsSpeedKmh = g_gps.lastSpeedKmh();
+        model.gpsValidSentences = g_gps.validSentences();
+        model.gpsRejectedSentences = g_gps.rejectedSentences();
         g_hardwareView.draw(g_buffer, model);
         return;
     }
@@ -885,9 +1007,9 @@ void refreshDisplay() {
     model.mountCalibrated = g_mount.isCalibrated();
     model.externalPower = g_power.isExternal();
     model.batteryPercent = M5.Power.getBatteryLevel();
-    // TODO(GPS): ustawic na true, gdy parser NMEA zaraportuje fix. Do tego czasu
-    // wiersz predkosci pokazuje "---" zamiast mylacego zera.
-    model.speedAvailable = false;
+    // Wiersz predkosci pokazuje "---" dopoki nie ma fixa — zero wygladaloby
+    // jak zmierzony wynik (§3a).
+    model.speedAvailable = g_gps.hasFix(millis());
 
     static char stateLabel[16];
     const uint32_t untilOff = g_deviceState.msUntilScreenOff(millis());
@@ -1105,8 +1227,9 @@ void setup() {
     config.internal_imu = true;
     config.internal_spk = true;
     config.clear_display = true;
-    // Wyjscie 5 V na Grove wlaczymy dopiero razem z modulem GPS — teraz
-    // niepotrzebnie obciazaloby baterie.
+    // Wyjscie 5 V na Grove zasila modul GPS, ale wlacza je hal::GpsSource
+    // dopiero na czas jazdy (§2.5) — przy starcie zostaje wylaczone, zeby
+    // urzadzenie obudzone na parkingu nie karmilo modulu przez caly czas.
     config.output_power = false;
     M5.begin(config);
 
@@ -1118,6 +1241,7 @@ void setup() {
 
     g_buffer.begin();
     g_imuAvailable = g_imu.begin();
+    g_gps.begin(millis());
 
     // Skan magistrali przed ekranem startowym — jego wynik trafia na ekran
     // jako jedna z linii diagnostycznych.
@@ -1259,6 +1383,7 @@ void loop() {
     const uint32_t nowMs = millis();
 
     pumpImu();
+    pumpGps(nowMs);
     handleButtons();
 
     g_power.update(nowMs);
