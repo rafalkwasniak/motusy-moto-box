@@ -26,6 +26,13 @@ czasu rzeczywistego — datę zna wyłącznie z modułu GPS (od 2026-09-03). Prz
 odbyty bez zasięgu satelitów idzie z `recorded_at: null` i to jest stan
 normalny, nie błąd. Data nigdy nie decyduje o kolejności.
 
+**`recorded_at` jest w UTC i przeliczenie na czas lokalny należy do strony.**
+Urządzenie nie zna swojej strefy czasowej, a Polska przechodzi z +2 na +1 pod
+koniec października — znacznik wysłany jako czas lokalny byłby raz w roku
+dwuznaczny (godzina 2:30 występuje dwukrotnie) i wymagałby aktualizacji
+firmware przy każdej zmianie reguł. Zapisane 20:27 UTC to 22:27 czasu
+warszawskiego latem i 21:27 zimą; przelicznik zna tylko strona.
+
 **Kasowania nie ma.** Wszystko, co trafiło do historii w urządzeniu, ma trafić
 na serwer. Usuwanie odbywa się wyłącznie po zalogowaniu na stronie i wyłącznie
 jako soft-delete — inaczej skasowany przejazd wróciłby przy następnej wysyłce.
@@ -91,7 +98,7 @@ opłaca się dzielić na pojedyncze żądania.
 | `fw` | string | wersja firmware — do diagnostyki zgłoszeń „dziwne wyniki" |
 | `calibrated` | bool | czy urządzenie ma kalibrację montażu; bez niej pomiary nie są zbierane |
 | `rides[].seq` | int > 0 | numer przejazdu w urządzeniu; klucz idempotencji |
-| `rides[].recorded_at` | int lub null | unix timestamp UTC końca przejazdu z GPS; `null` gdy przejazd odbył się bez fixa |
+| `rides[].recorded_at` | int lub null | unix timestamp **UTC** końca przejazdu z GPS; `null` gdy przejazd odbył się bez fixa |
 | `rides[].duration_s` | int | czas trwania przejazdu w sekundach |
 | `rides[].lean_left_deg` | **int** | maksymalny przechył w lewo, pełne stopnie |
 | `rides[].lean_right_deg` | **int** | maksymalny przechył w prawo, pełne stopnie |
