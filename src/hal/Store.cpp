@@ -18,6 +18,7 @@ constexpr const char* kKeyRideSeq = "seq";
 constexpr const char* kKeySent = "sent";
 constexpr const char* kKeyRideDuration = "rdur";
 constexpr const char* kKeyHistoryDuration = "hdur";
+constexpr const char* kKeyHistoryTime = "hts";
 constexpr const char* kKeySsid = "ssid";
 constexpr const char* kKeyPassword = "pass";
 constexpr const char* kKeyToken = "tok";
@@ -34,6 +35,9 @@ constexpr size_t kHistoryBytes =
 /// wpisu i wymagaloby podniesienia wersji schematu.
 constexpr size_t kHistoryDurationBytes =
     motion::RideHistory::kCapacity * sizeof(uint32_t);
+/// Znaczniki czasu przejazdow z historii — kolejny klucz rownolegly, z tego
+/// samego powodu co czasy trwania.
+constexpr size_t kHistoryTimeBytes = motion::RideHistory::kCapacity * sizeof(uint32_t);
 
 void packFloat(uint8_t*& cursor, float value) {
     std::memcpy(cursor, &value, sizeof(float));
@@ -173,7 +177,15 @@ LoadResult Store::load(PersistentState& out) {
                 prefs_.getBytes(kKeyHistoryDuration, durations, kHistoryDurationBytes) ==
                 kHistoryDurationBytes;
 
-            out.history.restore(rides, haveDurations ? durations : nullptr, count);
+            // To samo dotyczy znacznikow czasu: przejazdy sprzed modulu GPS
+            // ida z zerem, czyli beda wyslane z `recorded_at: null`.
+            uint32_t timestamps[motion::RideHistory::kCapacity] = {};
+            const bool haveTimestamps =
+                prefs_.getBytes(kKeyHistoryTime, timestamps, kHistoryTimeBytes) ==
+                kHistoryTimeBytes;
+
+            out.history.restore(rides, haveDurations ? durations : nullptr, count,
+                                haveTimestamps ? timestamps : nullptr);
         }
     }
 
@@ -225,6 +237,14 @@ bool Store::saveHistory(const motion::RideHistory& history) {
     }
     if (prefs_.putBytes(kKeyHistoryDuration, durations, kHistoryDurationBytes) !=
         kHistoryDurationBytes) {
+        return false;
+    }
+
+    uint32_t timestamps[motion::RideHistory::kCapacity] = {};
+    for (size_t i = 0; i < motion::RideHistory::kCapacity; ++i) {
+        timestamps[i] = history.recordedAtAt(i);
+    }
+    if (prefs_.putBytes(kKeyHistoryTime, timestamps, kHistoryTimeBytes) != kHistoryTimeBytes) {
         return false;
     }
 

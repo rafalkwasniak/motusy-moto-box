@@ -191,6 +191,50 @@ void test_rmc_without_gga_relies_on_status() {
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 37.04f, parser.fix().speedKmh);
 }
 
+// ── Czas z modulu ──────────────────────────────────────────────────────────
+// Urzadzenie nie ma RTC, wiec RMC jest jedynym zrodlem daty w calym systemie.
+
+/// Zdanie zapisane realnie przez ten egzemplarz modulu, 2026-09-03 20:03:34 UTC.
+void test_rmc_carries_unix_time() {
+    NmeaParser parser;
+    feedAll(parser, sentence("GNRMC,200334.00,A,5022.97050,N,01902.53583,E,0.06,,030926,,,A,V"));
+
+    TEST_ASSERT_EQUAL_UINT32(1788465814u, parser.fix().unixTime);
+}
+
+/// Rok przestepny i przelom stulecia — tam wykladaja sie recznie pisane
+/// przeliczniki dat.
+void test_unix_time_handles_leap_year_and_century() {
+    NmeaParser parser;
+    feedAll(parser, sentence("GNRMC,120000.00,A,,,,,0.0,,290224,,,A,V"));
+    TEST_ASSERT_EQUAL_UINT32(1709208000u, parser.fix().unixTime);
+
+    feedAll(parser, sentence("GNRMC,000000.00,A,,,,,0.0,,010100,,,A,V"));
+    TEST_ASSERT_EQUAL_UINT32(946684800u, parser.fix().unixTime);
+}
+
+/// Czas bywa znany, zanim odbiornik rozwiaze pozycje. Wtedy predkosci nie ma,
+/// ale znacznik czasu przejazdu juz owszem.
+void test_time_is_read_even_without_fix() {
+    NmeaParser parser;
+    feedAll(parser, sentence("GNRMC,200334.00,V,,,,,,,030926,,,N,V"));
+
+    TEST_ASSERT_FALSE(parser.fix().valid);
+    TEST_ASSERT_EQUAL_UINT32(1788465814u, parser.fix().unixTime);
+}
+
+/// Odbiornik bez synchronizacji zostawia oba pola puste — zero znaczy
+/// "nieznany" i idzie do API jako null.
+void test_missing_date_gives_no_time() {
+    NmeaParser parser;
+    feedAll(parser, sentence("GNRMC,,V,,,,,,,,,,N,V"));
+    TEST_ASSERT_EQUAL_UINT32(0, parser.fix().unixTime);
+
+    // Bzdurna data tez ma dac zero, a nie znacznik gdzies w przyszlosci.
+    feedAll(parser, sentence("GNRMC,200334.00,A,,,,,0.0,,309926,,,A,V"));
+    TEST_ASSERT_EQUAL_UINT32(0, parser.fix().unixTime);
+}
+
 /// Zdanie moze przyjsc w kawalkach — bufor UART-u nie zna granic zdan.
 void test_sentence_split_across_reads() {
     NmeaParser parser;
@@ -222,5 +266,9 @@ int main(int, char**) {
     RUN_TEST(test_proprietary_sentence_is_not_taken_for_rmc);
     RUN_TEST(test_rmc_without_gga_relies_on_status);
     RUN_TEST(test_sentence_split_across_reads);
+    RUN_TEST(test_rmc_carries_unix_time);
+    RUN_TEST(test_unix_time_handles_leap_year_and_century);
+    RUN_TEST(test_time_is_read_even_without_fix);
+    RUN_TEST(test_missing_date_gives_no_time);
     return UNITY_END();
 }

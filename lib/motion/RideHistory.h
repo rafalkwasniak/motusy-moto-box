@@ -30,8 +30,12 @@ public:
     /// jest przypiety do wersji schematu — dolozenie tam szostego pola
     /// skasowaloby uzytkownikowi kalibracje.
     ///
+    /// Znacznik czasu jedzie obok z tego samego powodu, co czas trwania:
+    /// `RideValues` opisuje pomiar i jego uklad w NVS jest przypiety do wersji
+    /// schematu.
+    ///
     /// @return true jesli przejazd zostal zapisany
-    bool push(const RideValues& ride, uint32_t durationS = 0);
+    bool push(const RideValues& ride, uint32_t durationS = 0, uint32_t recordedAt = 0);
 
     size_t count() const { return count_; }
 
@@ -43,15 +47,22 @@ public:
     /// oraz dla wpisow sprzed wprowadzenia pomiaru czasu.
     uint32_t durationAt(size_t index) const;
 
+    /// Uniksowy znacznik konca przejazdu. Zero = nieznany (przejazd bez fixa
+    /// GPS albo wpis sprzed modulu) i idzie do API jako null.
+    uint32_t recordedAtAt(size_t index) const;
+
     void clear();
 
     /// Odtworzenie z pamieci nieulotnej: `rides[0]` to najnowszy przejazd.
-    /// `durations` moze byc nullptr — wtedy wszystkie czasy sa zerowe.
-    void restore(const RideValues* rides, const uint32_t* durations, size_t count);
+    /// `durations` i `recordedAt` moga byc nullptr — wtedy odpowiednie
+    /// wartosci sa zerowe (wpisy sprzed wprowadzenia tych pomiarow).
+    void restore(const RideValues* rides, const uint32_t* durations, size_t count,
+                 const uint32_t* recordedAt = nullptr);
 
 private:
     RideValues slots_[kCapacity] = {};
     uint32_t durations_[kCapacity] = {};
+    uint32_t recordedAt_[kCapacity] = {};
     /// Indeks najnowszego wpisu w buforze pierscieniowym.
     size_t head_ = 0;
     size_t count_ = 0;

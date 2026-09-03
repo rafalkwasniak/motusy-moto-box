@@ -211,6 +211,20 @@ transmisji, *zero bajtów* = zły pin, brak zasilania albo odłączony kabel.
 Moduł łapie fix **wewnątrz budynku**: 14 satelitów, HDOP 1,6, `ANTENNA OK`
 w `$GPTXT`. Nadaje 1 Hz, komplet GNSS (GPS, GLONASS, BeiDou, Galileo, QZSS).
 
+#### GPS jako jedyny zegar urządzenia
+
+RTC na płytce nie ma (pozycja V3 w §1.1), więc czas ze zdania RMC jest **jedynym
+źródłem daty w całym systemie** — to z niego bierze się `recorded_at` w przesyłce
+do API. Trzy konsekwencje, które wynikają z tego wprost:
+
+- **Czas jest brany niezależnie od fixa pozycyjnego.** Odbiornik zna godzinę
+  wcześniej, niż rozwiąże pozycję, a data przejazdu jest wtedy już dobra.
+- **Między zdaniami zegar chodzi na `millis()`.** Po odcięciu zasilania modułu
+  (poza jazdą) znacznik nie znika — przestaje być tylko korygowany. Dzięki temu
+  przejazd zarchiwizowany po zgaszeniu stacyjki ma sensowną datę.
+- **Brak daty to `null`, nie zero i nie data zastępcza.** Przejazd w garażu
+  podziemnym po prostu jej nie ma; kolejność w historii i tak wynika z `seq`.
+
 ---
 
 ## 3. Przyspieszenie i hamowanie — kompensacja pochylenia
@@ -826,11 +840,11 @@ kliknięciem, bez liczenia czegokolwiek.
 
 ---
 
-## 16. Bramka prędkości — ustalenie na etap GPS
+## 16. Bramka prędkości
 
-Decyzja użytkownika z 2026-09-01, do wykonania razem z modułem GPS. Zapisana
-teraz, bo powód jest konkretny i łatwo go zgubić: **przechył motocykla przy
-2 km/h nie jest rekordem przechyłu.**
+Decyzja użytkownika z 2026-09-01, **zrobiona 2026-09-03** wraz z modułem GPS
+(`motion::SpeedGate`, 8 testów natywnych). Powód jest konkretny: **przechył
+motocykla przy 2 km/h nie jest rekordem przechyłu.**
 
 ### 16.1. Problem
 
@@ -892,3 +906,29 @@ Przy pierwszej prawdziwej jeździe włączyć rejestrator surowych danych
 ile rekordów bramka faktycznie odcięłaby i czy 5 km/h to właściwy próg —
 zamiast dobierać go na wyczucie po fakcie. Ten sam materiał służy do strojenia
 filtrów orientacji.
+
+### 16.5. Jak to wyszło w kodzie
+
+`motion::SpeedGate` (czyste C++, progi w `SpeedGateConfig`) dostaje każdą próbkę
+prędkości z potwierdzonym fixem, a `main.cpp` pyta go raz na iterację pętli:
+
+```cpp
+const bool recording = g_speedGate.isRecording(state.stationary, millis());
+if (recording) g_metrics.update(g_orientation.state());
+g_rideClock.update(recording, millis());
+```
+
+Czas trwania przejazdu liczy się z **tego samego** warunku co rekordy, więc
+przejazd zaczyna się od przekroczenia progu prędkości, a nie od włączenia
+stacyjki — zgodnie z §16.2.
+
+Dwie rzeczy warte zapamiętania przy czytaniu implementacji:
+
+- **Koniec wybiegu liczy się przy zapytaniu, nie przy próbce.** Moduł nadaje
+  1 Hz, a pętla pyta 100 razy na sekundę; gdyby wybieg kończył się dopiero przy
+  następnym zdaniu, trwałby do sekundy dłużej, niż mówi konfiguracja.
+- **Wybieg nie odnawia się na postoju.** Liczy się od pierwszej próbki poniżej
+  progu wyjścia — inaczej stanie na światłach rejestrowałoby się bez końca.
+
+Prędkość maksymalna nie potrzebuje osobnej bramki: `RideMetrics` odrzuca próbki
+poniżej 5 km/h tym samym progiem (§3a).

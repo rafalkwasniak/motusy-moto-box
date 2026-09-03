@@ -79,6 +79,13 @@ public:
     /// Czy z modulu w ogole cokolwiek przychodzi (dobrana predkosc transmisji).
     bool isReceiving() const { return locked_; }
 
+    /// Czas UTC jako uniksowy znacznik [s]; 0 gdy modul jeszcze go nie podal.
+    /// Miedzy zdaniami (i po odcieciu zasilania modulu) doliczany jest uplyw
+    /// millis() — zegar urzadzenia chodzi dalej, tylko przestaje byc
+    /// korygowany. To jedyne zrodlo daty w systemie: RTC na plytce nie ma.
+    uint32_t unixTime(uint32_t nowMs) const;
+    bool hasTime() const { return lastEpoch_ != 0; }
+
     uint32_t baud() const { return baud_; }
     int rxPin() const { return rxPin_; }
     uint8_t satellites() const { return parser_.fix().satellites; }
@@ -126,6 +133,9 @@ private:
 
     uint32_t lastSentenceMs_ = 0;
     uint32_t lastFixMs_ = 0;
+    /// Ostatni znacznik czasu z modulu i chwila, w ktorej przyszedl.
+    uint32_t lastEpoch_ = 0;
+    uint32_t lastEpochMs_ = 0;
     bool everFixed_ = false;
 };
 

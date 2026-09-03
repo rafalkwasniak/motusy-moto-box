@@ -43,6 +43,12 @@ struct NmeaFix {
     uint8_t satellites = 0;
     /// 0 oznacza "nieznane" — modul nie przyslal jeszcze GGA.
     float hdop = 0.0f;
+    /// Czas UTC z RMC jako uniksowy znacznik [s]; 0 = nieznany.
+    ///
+    /// URZADZENIE NIE MA RTC (§1.1, pozycja V3), wiec to jedyne zrodlo daty
+    /// w calym systemie. Czas bywa znany ZANIM pojawi sie fix pozycyjny —
+    /// dlatego nie jest zwiazany z flaga `valid`.
+    uint32_t unixTime = 0;
 };
 
 /// Typ zdania, ktore wlasnie sie domknelo.
@@ -86,6 +92,9 @@ private:
     Sentence parseSentence();
     void parseRmc();
     void parseGga();
+    /// Skleja pola czasu ("hhmmss.ss") i daty ("ddmmrr") z RMC w uniksowy
+    /// znacznik. Zero oznacza "nie da sie odczytac".
+    static uint32_t parseDateTime(const char* time, const char* date);
     /// Kopiuje pole o zadanym numerze (0 = typ zdania) do `out`.
     /// @return false gdy pola nie ma — wtedy `out` jest pustym napisem.
     bool field(size_t index, char* out, size_t size) const;

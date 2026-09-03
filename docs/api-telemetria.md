@@ -22,8 +22,9 @@ unikalnym po stronie API. Powtórna wysyłka tego samego przejazdu nie może
 tworzyć duplikatu — ma trafić w istniejący wpis.
 
 **Kolejność wyników wynika z `seq`, nie z czasu.** Urządzenie nie ma zegara
-czasu rzeczywistego. Do momentu montażu modułu GPS `recorded_at` jest `null`,
-a data na stronie po prostu się nie pokazuje.
+czasu rzeczywistego — datę zna wyłącznie z modułu GPS (od 2026-09-03). Przejazd
+odbyty bez zasięgu satelitów idzie z `recorded_at: null` i to jest stan
+normalny, nie błąd. Data nigdy nie decyduje o kolejności.
 
 **Kasowania nie ma.** Wszystko, co trafiło do historii w urządzeniu, ma trafić
 na serwer. Usuwanie odbywa się wyłącznie po zalogowaniu na stronie i wyłącznie
@@ -90,7 +91,7 @@ opłaca się dzielić na pojedyncze żądania.
 | `fw` | string | wersja firmware — do diagnostyki zgłoszeń „dziwne wyniki" |
 | `calibrated` | bool | czy urządzenie ma kalibrację montażu; bez niej pomiary nie są zbierane |
 | `rides[].seq` | int > 0 | numer przejazdu w urządzeniu; klucz idempotencji |
-| `rides[].recorded_at` | int lub null | unix timestamp końca przejazdu; `null` dopóki nie ma GPS |
+| `rides[].recorded_at` | int lub null | unix timestamp UTC końca przejazdu z GPS; `null` gdy przejazd odbył się bez fixa |
 | `rides[].duration_s` | int | czas trwania przejazdu w sekundach |
 | `rides[].lean_left_deg` | **int** | maksymalny przechył w lewo, pełne stopnie |
 | `rides[].lean_right_deg` | **int** | maksymalny przechył w prawo, pełne stopnie |
@@ -230,12 +231,19 @@ Ten sam nagłówek `Authorization`. Odpowiedź 200 z dowolną treścią oznacza
 
 ---
 
-## 6. Co zmieni moduł GPS
+## 6. Co zmienił moduł GPS (2026-09-03)
 
-Kształt przesyłki się nie zmienia — wypełnią się pola, które dziś są `null`:
-`recorded_at` (czas z GPS) i `speed_kmh`. Dojdą prawdopodobnie dane trasy
-(dystans, punkt startu). Warto od razu zaprojektować tabelę tak, żeby
-dołożenie pól nie wymagało wersjonowania API.
+Kształt przesyłki się nie zmienił — **wypełniły się pola, które wcześniej były
+`null`**: `recorded_at` i `speed_kmh`. Po stronie API nie ma nic do zrobienia,
+o ile kolumny są nullable zgodnie z §5, ale panel powinien od teraz umieć
+pokazać datę przejazdu i prędkość maksymalną.
+
+Oba pola nadal **bywają puste i to jest poprawne**: przejazd w garażu
+podziemnym nie ma ani daty, ani prędkości. Walidacja `present, nullable` musi
+zostać taka, jaka jest.
+
+Nadal do zrobienia po tej stronie: dane trasy (dystans, ślad — osobny endpoint,
+patrz `docs/gpx-slad-trasy.md`).
 
 ---
 

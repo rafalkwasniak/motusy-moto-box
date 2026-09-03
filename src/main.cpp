@@ -11,10 +11,11 @@
 //   K3a konfiguracja integracji komendami przez USB (SIEC=, HASLO=, TOKEN=)
 //   K4  punkt dostepowy i formularz konfiguracji na telefonie
 //   K5  klient HTTPS: laczenie z siecia domowa, harmonogram, wysylka
-//   GPS parser NMEA, predkosc maksymalna do wynikow i do filtru orientacji
+//   GPS parser NMEA, predkosc maksymalna do wynikow i do filtru orientacji,
+//       bramka predkosci (§16), znacznik czasu przejazdu (recorded_at)
 //
 // Pozostaje:
-//   bramka predkosci (§16), znacznik czasu przejazdu z GPS, slad trasy (GPX)
+//   slad trasy (GPX), strojenie filtrow na danych z jazdy, ew. deep sleep
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -30,6 +31,7 @@
 #include "Orientation.h"
 #include "RideClock.h"
 #include "RideMetrics.h"
+#include "SpeedGate.h"
 #include "TelemetryJson.h"
 #include "UploadQueue.h"
 #include "UploadScheduler.h"
@@ -62,6 +64,9 @@ motion::MountCalibration g_mount;
 motion::RideHistory g_history;
 /// Czas trwania biezacego przejazdu — od pierwszego do ostatniego ruchu.
 motion::RideClock g_rideClock;
+/// §16 — pomiary zapisujemy dopiero powyzej progu predkosci. Bez tego przechyl
+/// przy manewrowaniu ustanawia rekord calej sesji.
+motion::SpeedGate g_speedGate;
 /// Czy biezacy przejazd trafil juz do historii — patrz archiveCurrentRide().
 bool g_rideArchived = false;
 
@@ -250,7 +255,11 @@ void drawMessage(const char* title, const char* detail, uint16_t accent) {
 /// zanik nigdy nie zostal potwierdzony, np. po restarcie na baterii).
 void archiveCurrentRide() {
     if (g_rideArchived) return;
-    if (!g_history.push(g_metrics.currentRide(), g_rideClock.seconds())) {
+    // Znacznik czasu bierzemy z GPS-a — urzadzenie nie ma RTC. Zero znaczy
+    // "przejazd bez zasiegu satelitow" i idzie do API jako null; kolejnosc
+    // przejazdow i tak wynika z numeru `seq`, nie z daty.
+    if (!g_history.push(g_metrics.currentRide(), g_rideClock.seconds(),
+                        g_gps.unixTime(millis()))) {
         return;  // pusty przejazd
     }
     g_rideArchived = true;
@@ -596,6 +605,27 @@ void printGpsStatus(Stream& io) {
               g_gps.isReceiving() ? "tak" : "NIE",
               g_gps.hasFix(nowMs) ? "tak" : "nie", static_cast<unsigned>(g_gps.satellites()),
               static_cast<double>(g_gps.hdop()), static_cast<double>(g_gps.lastSpeedKmh()));
+
+    // Czas z modulu to jedyne zrodlo daty w urzadzeniu — bez niego przejazdy
+    // ida na serwer z `recorded_at: null`.
+    const uint32_t epoch = g_gps.unixTime(nowMs);
+    if (epoch == 0) {
+        io.println("[gps] czas: nieznany - przejazdy pojda z recorded_at: null");
+    } else {
+        const time_t stamp = static_cast<time_t>(epoch);
+        struct tm utc;
+        gmtime_r(&stamp, &utc);
+        io.printf("[gps] czas UTC: %04d-%02d-%02d %02d:%02d:%02d (epoch %lu)\n",
+                  utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min,
+                  utc.tm_sec, static_cast<unsigned long>(epoch));
+    }
+
+    // Bramka predkosci (§16): po tym widac, czy pomiary sa w tej chwili
+    // zapisywane i co o tym zadecydowalo.
+    io.printf("[gps] bramka: %s (zrodlo: %s)\n",
+              g_speedGate.isRecording(g_orientation.state().stationary, nowMs) ? "rejestruje"
+                                                                              : "wstrzymana",
+              g_speedGate.hasFreshSpeed(nowMs) ? "predkosc GPS" : "bezruch z IMU");
 }
 
 /// Stan konfiguracji BEZ sekretow: haslo tylko jako fakt, token zamaskowany.
@@ -852,10 +882,18 @@ void pumpImu() {
     // wiec rekordy byly by smieciami. Estymator dziala dalej (widac go
     // w diagnostyce), tylko nic nie zapisujemy.
     if (g_mount.isCalibrated() && g_deviceState.state() == state::DeviceState::Riding) {
-        g_metrics.update(g_orientation.state());
+        // §16 — bramka predkosci. Przy zywym GPS-ie decyduje predkosc (z
+        // histereza i wybiegiem na hamowanie), a bez fixa zostaje dawna regula
+        // oparta na bezruchu z IMU.
+        const bool recording =
+            g_speedGate.isRecording(g_orientation.state().stationary, millis());
+
+        if (recording) g_metrics.update(g_orientation.state());
+
         // Czas trwania liczymy z tego samego warunku co rekordy: manipulowanie
-        // urzadzeniem na parkingu nie jest przejazdem.
-        g_rideClock.update(!g_orientation.state().stationary, millis());
+        // urzadzeniem na parkingu nie jest przejazdem. Przejazd zaczyna sie
+        // wiec od przekroczenia progu predkosci, nie od wlaczenia stacyjki.
+        g_rideClock.update(recording, millis());
     }
 }
 
@@ -900,6 +938,10 @@ void pumpGps(uint32_t nowMs) {
 
     const motion::SpeedSample sample = g_gps.speed(nowMs);
     if (!sample.valid) return;
+
+    // Bramka predkosci (§16) dostaje kazda probke z fixem — takze zero, bo
+    // wlasnie na zerach zamyka rejestracje po wybiegu.
+    g_speedGate.updateSpeed(sample.kmh, nowMs);
 
     // Korekcja przechylu z ustalonego zakretu (§2.4). Filtr ma to wejscie
     // gotowe od poczatku — GPS wlasnie je wypelnia. Predkosc w m/s.
@@ -1327,6 +1369,7 @@ void handleStateEvent(state::DeviceEvent event) {
             driveSiren(guard::AlarmOutput{});
             g_metrics.startNewRide();
             g_rideClock.reset();
+            g_speedGate.reset();
             g_rideArchived = false;
 #if MMB_RAW_LOGGER
             g_logger.startSession(millis());

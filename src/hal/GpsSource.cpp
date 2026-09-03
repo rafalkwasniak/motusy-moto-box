@@ -69,6 +69,13 @@ bool GpsSource::update(uint32_t nowMs) {
             lastFixMs_ = nowMs;
             everFixed_ = true;
         }
+
+        // Czas przychodzi CZESTO WCZESNIEJ niz fix pozycyjny, wiec bierzemy go
+        // niezaleznie od tego, czy pozycja jest juz rozwiazana.
+        if (parser_.fix().unixTime != 0) {
+            lastEpoch_ = parser_.fix().unixTime;
+            lastEpochMs_ = nowMs;
+        }
     }
 
     // Cisza po udanym dobraniu ustawien oznacza, ze modul zostal odlaczony
@@ -92,6 +99,11 @@ motion::SpeedSample GpsSource::speed(uint32_t nowMs) const {
     sample.valid = fix.valid && hasFix(nowMs);
     sample.kmh = sample.valid ? fix.speedKmh : 0.0f;
     return sample;
+}
+
+uint32_t GpsSource::unixTime(uint32_t nowMs) const {
+    if (lastEpoch_ == 0) return 0;
+    return lastEpoch_ + (nowMs - lastEpochMs_) / 1000;
 }
 
 bool GpsSource::hasFix(uint32_t nowMs) const {
