@@ -90,21 +90,12 @@ void MainScreen::drawStatusBar(m5gfx::LovyanGFX* gfx, const MainScreenModel& mod
     gfx->setTextColor(model.stateColor);
     gfx->drawString(model.stateLabel, layout::kLabelX, layout::kStatusBarHeight / 2);
 
-    // Odznaka alarmu: wypelniona gdy modul wlaczony, sam obrys gdy wylaczony.
-    constexpr int kBadgeW = 34;
-    constexpr int kBadgeH = 13;
-    const int badgeX = (layout::kScreenWidth - kBadgeW) / 2;
-    const int badgeY = (layout::kStatusBarHeight - kBadgeH) / 2;
-    if (model.alarmEnabled) {
-        gfx->fillRoundRect(badgeX, badgeY, kBadgeW, kBadgeH, 3, color::kAlarm);
-        gfx->setTextColor(color::kBackground);
-    } else {
-        gfx->drawRoundRect(badgeX, badgeY, kBadgeW, kBadgeH, 3, color::kDivider);
-        gfx->setTextColor(color::kDivider);
-    }
-    gfx->setFont(&fonts::Font0);
-    gfx->setTextDatum(middle_center);
-    gfx->drawString("ALM", layout::kScreenWidth / 2, layout::kStatusBarHeight / 2);
+    // Odznaki modulow, dosuniete do rezerwy na wskaznik zasilania. GPX lezy
+    // blizej krawedzi, tuz obok EXT.
+    const int gpxX = layout::kRideRightX - layout::kPowerReserveW - layout::kBadgeW;
+    const int almX = gpxX - layout::kBadgeGap - layout::kBadgeW;
+    drawBadge(gfx, almX, "ALM", model.alarmEnabled, color::kAlarm);
+    drawBadge(gfx, gpxX, "GPX", model.trackEnabled, color::kSpeed);
 
     // Zrodlo zasilania: przy zasilaniu z motocykla stan baterii nie jest istotny.
     gfx->setFont(&fonts::Font2);
@@ -120,6 +111,26 @@ void MainScreen::drawStatusBar(m5gfx::LovyanGFX* gfx, const MainScreenModel& mod
     }
 
     gfx->drawFastHLine(0, layout::kStatusBarHeight, layout::kScreenWidth, color::kDivider);
+}
+
+void MainScreen::drawBadge(m5gfx::LovyanGFX* gfx, int x, const char* label, bool enabled,
+                           uint16_t accent) {
+    // Wypelniona gdy modul wlaczony, sam obrys gdy wylaczony. Rozroznienie musi
+    // dzialac bez czytania napisu — na ekranie 240x135 odznaka jest widoczna
+    // katem oka, a jej tresc juz nie.
+    const int y = (layout::kStatusBarHeight - layout::kBadgeH) / 2;
+
+    if (enabled) {
+        gfx->fillRoundRect(x, y, layout::kBadgeW, layout::kBadgeH, 3, accent);
+        gfx->setTextColor(color::kBackground);
+    } else {
+        gfx->drawRoundRect(x, y, layout::kBadgeW, layout::kBadgeH, 3, color::kDivider);
+        gfx->setTextColor(color::kDivider);
+    }
+
+    gfx->setFont(&fonts::Font0);
+    gfx->setTextDatum(middle_center);
+    gfx->drawString(label, x + layout::kBadgeW / 2, layout::kStatusBarHeight / 2);
 }
 
 void MainScreen::drawHeaders(m5gfx::LovyanGFX* gfx, const MainScreenModel& model) {

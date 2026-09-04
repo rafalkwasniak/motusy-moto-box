@@ -52,6 +52,22 @@ constexpr int kContentWidth = kContentRight - kContentLeft;
 /// Pasek statusu na gorze.
 constexpr int kStatusBarHeight = 15;
 
+/// Odznaki modulow w pasku statusu (ALM, GPX). Wypelniona = wlaczony,
+/// sam obrys = wylaczony.
+constexpr int kBadgeW = 34;
+constexpr int kBadgeH = 13;
+constexpr int kBadgeGap = 5;
+
+/// Ile miejsca zostawiamy z prawej na wskaznik zasilania. Liczone pod
+/// NAJSZERSZY wariant, czyli "100%" w Font2 (~37 px) — a nie pod "EXT", ktore
+/// widac przy biurku i przy jezdzie, wiec latwo je wziac za przypadek typowy.
+///
+/// Odznaki sa dosuniete do tej rezerwy, a nie wysrodkowane w pasku: przy dwoch
+/// odznakach wysrodkowana para siegalaby x=83, a najdluzszy napis stanu
+/// ("BEZ OCHRONY") konczy sie w okolicy x=90. Kotwiczenie po prawej zostawia
+/// lewej stronie ponad 110 px i nie zalezy od tego, ile znakow ma stan.
+constexpr int kPowerReserveW = 44;
+
 /// Naglowki kolumn.
 constexpr int kHeaderY = 17;
 constexpr int kHeaderHeight = 11;

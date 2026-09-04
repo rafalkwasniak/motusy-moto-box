@@ -1037,6 +1037,7 @@ void refreshDisplay() {
         model.stateLabel = pageLabel;
         model.stateColor = ui::color::kPrimary;
         model.alarmEnabled = g_alarmEnabled;
+        model.trackEnabled = g_trackEnabled;
         model.externalPower = g_power.isExternal();
         model.batteryPercent = M5.Power.getBatteryLevel();
         g_mainScreen.draw(g_buffer, model);
@@ -1091,6 +1092,7 @@ void refreshDisplay() {
     model.overall = g_metrics.overall();
     model.ride = g_metrics.currentRide();
     model.alarmEnabled = g_alarmEnabled;
+    model.trackEnabled = g_trackEnabled;
     model.mountCalibrated = g_mount.isCalibrated();
     model.externalPower = g_power.isExternal();
     model.batteryPercent = M5.Power.getBatteryLevel();

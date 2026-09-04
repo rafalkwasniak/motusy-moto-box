@@ -3,7 +3,7 @@
 // Dziesiec wartosci w ukladzie dwoch kolumn:
 //
 //   ┌──────────────────────────────────────────┐
-//   │ JAZDA              [ALM]           EXT   │  pasek statusu
+//   │ JAZDA                  [ALM][GPX]  EXT   │  pasek statusu
 //   ├──────────────────────────────────────────┤
 //   │              MAX          LOTKA          │  naglowki kolumn
 //   │ LEWE          42°           31°          │
@@ -43,6 +43,8 @@ struct MainScreenModel {
     uint16_t stateColor = color::kRiding;
 
     bool alarmEnabled = false;
+    /// Zapis sladu trasy — druga odznaka w pasku statusu, obok ALM.
+    bool trackEnabled = false;
     bool mountCalibrated = false;
 
     bool externalPower = false;
@@ -55,6 +57,9 @@ public:
 
 private:
     static void drawStatusBar(m5gfx::LovyanGFX* gfx, const MainScreenModel& model);
+    /// Odznaka modulu w pasku statusu: wypelniona gdy wlaczony, obrys gdy nie.
+    static void drawBadge(m5gfx::LovyanGFX* gfx, int x, const char* label, bool enabled,
+                          uint16_t accent);
     static void drawHeaders(m5gfx::LovyanGFX* gfx, const MainScreenModel& model);
     static void drawRows(m5gfx::LovyanGFX* gfx, const MainScreenModel& model);
 
