@@ -40,6 +40,16 @@ struct NmeaFix {
     /// jest pomiarem.
     bool valid = false;
     float speedKmh = 0.0f;
+
+    /// Pozycja w jednostkach 1e-5 stopnia (stopnie x 100 000), kolejnosc
+    /// lon przed lat jak w calym sladzie. Wazna tylko gdy `valid`.
+    ///
+    /// ROZDZIELCZOSC 1e-5 STOPNIA to 1,11 m na poludniku i 0,69 m na 52°N.
+    /// Odbiornik podaje wiecej cyfr, ale jego wlasny blad to 2-5 m, wiec
+    /// szosta cyfra opisywalaby wylacznie szum — a kosztowalaby jedna cyfre
+    /// w kazdej delcie sladu, czyli okolo 20% jego rozmiaru.
+    int32_t lonE5 = 0;
+    int32_t latE5 = 0;
     uint8_t satellites = 0;
     /// 0 oznacza "nieznane" — modul nie przyslal jeszcze GGA.
     float hdop = 0.0f;
@@ -95,6 +105,12 @@ private:
     /// Skleja pola czasu ("hhmmss.ss") i daty ("ddmmrr") z RMC w uniksowy
     /// znacznik. Zero oznacza "nie da sie odczytac".
     static uint32_t parseDateTime(const char* time, const char* date);
+    /// Wspolrzedna "ddmm.mmmm" (albo "dddmm.mmmm") z polkula -> jednostki
+    /// 1e-5 stopnia. `maxE5` to gorna granica co do wartosci bezwzglednej:
+    /// 9000000 dla szerokosci, 18000000 dla dlugosci — funkcja sama nie wie,
+    /// ktora wspolrzedna dostala.
+    /// @return false gdy pole jest puste albo niepoprawne.
+    static bool parseCoordinate(const char* text, char hemisphere, int32_t maxE5, int32_t& out);
     /// Kopiuje pole o zadanym numerze (0 = typ zdania) do `out`.
     /// @return false gdy pola nie ma — wtedy `out` jest pustym napisem.
     bool field(size_t index, char* out, size_t size) const;

@@ -86,6 +86,12 @@ public:
     uint32_t unixTime(uint32_t nowMs) const;
     bool hasTime() const { return lastEpoch_ != 0; }
 
+    /// Pozycja z ostatniego fixu w jednostkach 1e-5 stopnia. Ma sens wylacznie
+    /// przy `hasFix()` — bez fixa parser zostawia tu zera, a zero to punkt
+    /// w Zatoce Gwinejskiej, nie brak danych.
+    int32_t lonE5() const { return parser_.fix().lonE5; }
+    int32_t latE5() const { return parser_.fix().latE5; }
+
     uint32_t baud() const { return baud_; }
     int rxPin() const { return rxPin_; }
     uint8_t satellites() const { return parser_.fix().satellites; }

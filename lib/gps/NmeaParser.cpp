@@ -132,15 +132,94 @@ void NmeaParser::parseRmc() {
     field(2, value, sizeof(value));
     const bool statusOk = value[0] == 'A';
 
+    // Pola 3-6: szerokosc, polkula N/S, dlugosc, polkula E/W.
+    char coord[16];
+    char hemisphere[8];
+
+    int32_t latE5 = 0;
+    field(3, coord, sizeof(coord));
+    field(4, hemisphere, sizeof(hemisphere));
+    const bool latOk = parseCoordinate(coord, hemisphere[0], 9000000, latE5);
+
+    int32_t lonE5 = 0;
+    field(5, coord, sizeof(coord));
+    field(6, hemisphere, sizeof(hemisphere));
+    const bool lonOk = parseCoordinate(coord, hemisphere[0], 18000000, lonE5);
+
     // Pole 7: predkosc nad ziemia w wezlach.
     field(7, value, sizeof(value));
     const float knots = static_cast<float>(std::strtod(value, nullptr));
 
     fix_.satellites = satellites_;
     fix_.hdop = hdop_;
-    fix_.valid = statusOk && qualityOk();
+    // Pozycja jest czescia fixu na rowni ze statusem: zdanie ze statusem 'A',
+    // ale z pustymi polami wspolrzednych, nie opisuje miejsca i nie ma prawa
+    // trafic do sladu.
+    fix_.valid = statusOk && latOk && lonOk && qualityOk();
     // 1 wezel = 1,852 km/h dokladnie — z definicji mili morskiej.
     fix_.speedKmh = fix_.valid ? knots * 1.852f : 0.0f;
+    fix_.lonE5 = fix_.valid ? lonE5 : 0;
+    fix_.latE5 = fix_.valid ? latE5 : 0;
+}
+
+bool NmeaParser::parseCoordinate(const char* text, char hemisphere, int32_t maxE5,
+                                 int32_t& out) {
+    // LICZONE NA LICZBACH CALKOWITYCH, nie przez strtod. Wynik ma siedem cyfr
+    // znaczacych (np. 5133528), a float ma ich okolo siedmiu — konwersja przez
+    // float gubilaby ostatnia, czyli okolo metra, przy KAZDYM fixie. Blad
+    // trafialby potem do kazdej delty sladu.
+    const size_t length = std::strlen(text);
+    if (length == 0) return false;
+
+    const char* dot = std::strchr(text, '.');
+    const size_t intLength = dot != nullptr ? static_cast<size_t>(dot - text) : length;
+
+    // Format to zawsze stopnie + DWIE cyfry minut, wiec ostatnie dwie cyfry
+    // czesci calkowitej to minuty, a wszystko przed nimi to stopnie. Dzieki
+    // temu ta sama funkcja obsluguje szerokosc (ddmm) i dlugosc (dddmm).
+    if (intLength < 3 || intLength > 5) return false;
+
+    int32_t degrees = 0;
+    for (size_t i = 0; i + 2 < intLength; ++i) {
+        if (text[i] < '0' || text[i] > '9') return false;
+        degrees = degrees * 10 + (text[i] - '0');
+    }
+
+    int32_t minutesE4 = 0;
+    for (size_t i = intLength - 2; i < intLength; ++i) {
+        if (text[i] < '0' || text[i] > '9') return false;
+        minutesE4 = minutesE4 * 10 + (text[i] - '0');
+    }
+    if (minutesE4 >= 60) return false;
+    minutesE4 *= 10000;
+
+    // Czesc ulamkowa minut, znormalizowana do czterech cyfr. Odbiorniki podaja
+    // ich cztery albo piec — nadmiar obcinamy, niedomiar dopelniamy zerami.
+    if (dot != nullptr) {
+        int32_t scale = 1000;
+        for (const char* p = dot + 1; *p != '\0' && scale > 0; ++p) {
+            if (*p < '0' || *p > '9') return false;
+            minutesE4 += (*p - '0') * scale;
+            scale /= 10;
+        }
+    }
+
+    // 1e-5 stopnia = minuty / 60 * 1e5, a minuty mamy w jednostkach 1e-4,
+    // wiec caly przelicznik to dzielenie przez szesc. Plus trzy zaokragla
+    // do najblizszej jednostki zamiast obcinac w dol.
+    const int32_t value = degrees * 100000 + (minutesE4 + 3) / 6;
+
+    if (hemisphere == 'S' || hemisphere == 'W') {
+        out = -value;
+    } else if (hemisphere == 'N' || hemisphere == 'E') {
+        out = value;
+    } else {
+        return false;  // brak polkuli — nie wiadomo, po ktorej stronie swiata
+    }
+
+    // Poza zakresem zdanie jest uszkodzone, a nie egzotyczne.
+    if (out > maxE5 || out < -maxE5) return false;
+    return true;
 }
 
 void NmeaParser::parseGga() {

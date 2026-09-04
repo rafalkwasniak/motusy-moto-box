@@ -55,6 +55,20 @@ std::string rmcWithKnots(const char* knots, char status = 'A') {
     return sentence(body);
 }
 
+/// RMC z fixem i zadana pozycja. Pola 3-6 to szerokosc, N/S, dlugosc, E/W.
+std::string rmcWithPosition(const char* lat, const char* ns, const char* lon, const char* ew) {
+    std::string body = "GNRMC,120000.00,A,";
+    body += lat;
+    body += ",";
+    body += ns;
+    body += ",";
+    body += lon;
+    body += ",";
+    body += ew;
+    body += ",012.0,054.7,030926,,,A";
+    return sentence(body);
+}
+
 void test_rmc_with_fix_gives_speed_in_kmh() {
     NmeaParser parser;
     feedAll(parser, goodGga());
@@ -253,6 +267,83 @@ void test_sentence_split_across_reads() {
 
 }  // namespace
 
+// ── Pozycja ────────────────────────────────────────────────────────────────
+
+void test_rmc_niesie_pozycje() {
+    // 5008.1234 N = 50 stopni + 8,1234 minuty = 50,13539 stopnia.
+    // 01925.4321 E = 19 stopni + 25,4321 minuty = 19,42387 stopnia.
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, rmcWithPosition("5008.1234", "N", "01925.4321", "E"));
+
+    TEST_ASSERT_TRUE(parser.fix().valid);
+    TEST_ASSERT_EQUAL_INT32(5013539, parser.fix().latE5);
+    TEST_ASSERT_EQUAL_INT32(1942387, parser.fix().lonE5);
+}
+
+void test_polkula_poludniowa_i_zachodnia_sa_ujemne() {
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, rmcWithPosition("3350.5000", "S", "15112.2500", "W"));
+
+    TEST_ASSERT_TRUE(parser.fix().valid);
+    TEST_ASSERT_EQUAL_INT32(-3384167, parser.fix().latE5);
+    TEST_ASSERT_EQUAL_INT32(-15120417, parser.fix().lonE5);
+}
+
+void test_piec_cyfr_minut_jest_przyjmowane() {
+    // Czesc odbiornikow podaje piec cyfr ulamka minut. Nadmiar obcinamy —
+    // piata cyfra to 0,018 m, czyli szum ponizej rozdzielczosci zapisu.
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, rmcWithPosition("5008.12345", "N", "01925.43210", "E"));
+
+    TEST_ASSERT_TRUE(parser.fix().valid);
+    TEST_ASSERT_EQUAL_INT32(5013539, parser.fix().latE5);
+    TEST_ASSERT_EQUAL_INT32(1942387, parser.fix().lonE5);
+}
+
+void test_pusta_pozycja_uniewaznia_fix() {
+    // Zdanie ze statusem 'A', ale bez wspolrzednych, nie opisuje miejsca.
+    // Bez tego warunku slad zaczynalby sie w Zatoce Gwinejskiej.
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, sentence("GNRMC,120000.00,A,,,,,012.0,054.7,030926,,,A"));
+
+    TEST_ASSERT_FALSE(parser.fix().valid);
+    TEST_ASSERT_EQUAL_INT32(0, parser.fix().latE5);
+    TEST_ASSERT_EQUAL_INT32(0, parser.fix().lonE5);
+}
+
+void test_brak_polkuli_uniewaznia_fix() {
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, rmcWithPosition("5008.1234", "", "01925.4321", "E"));
+
+    TEST_ASSERT_FALSE(parser.fix().valid);
+}
+
+void test_pozycja_poza_zakresem_jest_odrzucana() {
+    // 95 stopni szerokosci nie istnieje — to uszkodzone zdanie, nie egzotyka.
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, rmcWithPosition("9500.0000", "N", "01925.4321", "E"));
+
+    TEST_ASSERT_FALSE(parser.fix().valid);
+}
+
+void test_utrata_fixu_zeruje_pozycje() {
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, rmcWithPosition("5008.1234", "N", "01925.4321", "E"));
+    TEST_ASSERT_EQUAL_INT32(5013539, parser.fix().latE5);
+
+    feedAll(parser, rmcWithKnots("012.0", 'V'));
+    TEST_ASSERT_FALSE(parser.fix().valid);
+    TEST_ASSERT_EQUAL_INT32(0, parser.fix().latE5);
+    TEST_ASSERT_EQUAL_INT32(0, parser.fix().lonE5);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_rmc_with_fix_gives_speed_in_kmh);
@@ -270,5 +361,12 @@ int main(int, char**) {
     RUN_TEST(test_unix_time_handles_leap_year_and_century);
     RUN_TEST(test_time_is_read_even_without_fix);
     RUN_TEST(test_missing_date_gives_no_time);
+    RUN_TEST(test_rmc_niesie_pozycje);
+    RUN_TEST(test_polkula_poludniowa_i_zachodnia_sa_ujemne);
+    RUN_TEST(test_piec_cyfr_minut_jest_przyjmowane);
+    RUN_TEST(test_pusta_pozycja_uniewaznia_fix);
+    RUN_TEST(test_brak_polkuli_uniewaznia_fix);
+    RUN_TEST(test_pozycja_poza_zakresem_jest_odrzucana);
+    RUN_TEST(test_utrata_fixu_zeruje_pozycje);
     return UNITY_END();
 }
