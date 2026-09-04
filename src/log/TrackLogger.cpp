@@ -165,6 +165,32 @@ TrackResume TrackLogger::resumeRide(const track::TrackHeader& header) {
     return result;
 }
 
+bool TrackLogger::nextPending(uint32_t& seq) const {
+    if (!mounted_) return false;
+    uint32_t lowest = 0;
+    if (countTracks(lowest) == 0) return false;
+    seq = lowest;
+    return true;
+}
+
+size_t TrackLogger::pendingCount() const {
+    if (!mounted_) return 0;
+    uint32_t lowest = 0;
+    return countTracks(lowest);
+}
+
+File TrackLogger::openTrack(uint32_t seq) const {
+    char name[24];
+    trackName(name, sizeof(name), seq);
+    return LittleFS.open(name, FILE_READ);
+}
+
+bool TrackLogger::removeTrack(uint32_t seq) {
+    char name[24];
+    trackName(name, sizeof(name), seq);
+    return LittleFS.remove(name);
+}
+
 void TrackLogger::startRide(const track::TrackHeader& header) {
     if (!mounted_) return;
     // Nowy przejazd zaczyna od czystego pliku: cokolwiek zostalo, nalezy

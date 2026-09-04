@@ -96,6 +96,22 @@ public:
     /// wylaczy slad w trakcie jazdy.
     void abortRide();
 
+    /// Numer najstarszego sladu czekajacego na wysylke.
+    ///
+    /// OBECNOSC PLIKU JEST KOLEJKA. Nie ma osobnego znacznika "wyslane" ani
+    /// w NVS, ani w pliku: 200, 413 i 422 kasuja slad, wszystko inne go
+    /// zostawia. Dzieki temu etap wysylki nie dotyka schematu pamieci, wiec
+    /// kalibracja montazu go przezywa.
+    /// @return false gdy nie ma nic do wyslania.
+    bool nextPending(uint32_t& seq) const;
+    size_t pendingCount() const;
+
+    /// Otwiera domkniety slad do odczytu. Wolajacy zamyka.
+    File openTrack(uint32_t seq) const;
+
+    /// Kasuje domkniety slad — po dostarczeniu albo po bledzie trwalym.
+    bool removeTrack(uint32_t seq);
+
     bool isRecording() const { return recording_; }
     uint32_t pointsWritten() const { return points_; }
     uint32_t bytesWritten() const { return bytes_; }

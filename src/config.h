@@ -89,6 +89,9 @@ constexpr uint32_t kIntegrationScreenMs = 5UL * 60UL * 1000UL;
 // — patrz src/net/RootCert.h.
 constexpr const char* kApiPingUrl = "https://motusy.top/api/v1/ping";
 constexpr const char* kApiRidesUrl = "https://motusy.top/api/v1/rides";
+/// Adres sladu sklada sie z device_id i numeru przejazdu, wiec przechowujemy
+/// wzorzec, a nie gotowy napis: "<baza>/devices/<id>/rides/<seq>/track".
+constexpr const char* kApiDevicesUrl = "https://motusy.top/api/v1/devices";
 
 /// Ile czekamy na polaczenie z siecia domowa. Router w garazu bywa daleko,
 /// ale po pietnastu sekundach kolejne czekanie to juz tylko palenie pradu.

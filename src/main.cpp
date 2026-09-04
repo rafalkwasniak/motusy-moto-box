@@ -450,6 +450,51 @@ net::UplinkStatus sendPendingRides(uint32_t& sentCount) {
     return result.status;
 }
 
+/// Wysyla zalegle slady, od najstarszego. Wymaga gotowego polaczenia.
+///
+/// Slady ida PO wynikach i w TYM SAMYM polaczeniu (docs/api-jak-wysylac.md §7):
+/// handshake TLS jest najdrozsza czescia calej operacji, a przy slabym laczu
+/// lepiej dowiezc wyniki wszystkich jazd niz jeden kompletny slad.
+net::TrackOutcome sendPendingTracks() {
+    net::TrackOutcome last = net::TrackOutcome::Delivered;
+
+    uint32_t seq = 0;
+    while (g_trackLogger.nextPending(seq)) {
+        File file = g_trackLogger.openTrack(seq);
+        if (!file) {
+            // Plik jest w katalogu, ale nie da sie go otworzyc. Zostawienie go
+            // znaczyloby probowanie w nieskonczonosc tego samego.
+            Serial.printf("[wysylka] slad %lu nie otwiera sie - kasuje\n",
+                          static_cast<unsigned long>(seq));
+            if (!g_trackLogger.removeTrack(seq)) break;
+            continue;
+        }
+
+        const size_t size = file.size();
+        const net::TrackResult result =
+            g_uplink.postTrack(g_integration.token, hal::deviceId(), seq, file, size);
+        file.close();
+        last = result.outcome;
+
+        if (result.outcome == net::TrackOutcome::Delivered ||
+            result.outcome == net::TrackOutcome::Discard) {
+            // Skasowanie pliku JEST potwierdzeniem — innego znacznika nie ma.
+            // Nieudane kasowanie musi przerwac petle, inaczej ten sam slad
+            // wracalby w kolko.
+            if (!g_trackLogger.removeTrack(seq)) {
+                Serial.printf("[wysylka] nie udalo sie skasowac sladu %lu\n",
+                              static_cast<unsigned long>(seq));
+                break;
+            }
+            continue;
+        }
+
+        break;  // Retry albo odmowa tokena — reszta poczeka na nastepna probe
+    }
+
+    return last;
+}
+
 /// Pelny cykl wysylki: radio wlaczone, przesylka, radio wylaczone.
 /// Blokuje petle glowna na kilkanascie sekund — dlatego wolane tylko wtedy,
 /// gdy nie ma czego mierzyc (patrz warunek w loop()).
@@ -465,10 +510,28 @@ void runScheduledUpload() {
 
     uint32_t sent = 0;
     const net::UplinkStatus status = sendPendingRides(sent);
+
+    // Odmowa tokena przy wynikach oznacza, ze slady tez nie przejda — nie ma
+    // po co ich probowac, a kazda proba liczy sie do ogranicznika 60/min,
+    // ktory serwer nalicza PRZED sprawdzeniem tokena.
+    net::TrackOutcome tracks = net::TrackOutcome::Delivered;
+    if (status != net::UplinkStatus::AuthRejected) tracks = sendPendingTracks();
+
     g_uplink.disconnect();
 
-    g_scheduler.onOutcome(toOutcome(status), millis());
-    if (status == net::UplinkStatus::AuthRejected) {
+    // Odmowa tokena z KTOREJKOLWIEK czesci wstrzymuje harmonogram. Poza tym
+    // niepowodzenie sladu NIE moze pogorszyc wyniku kroku z przejazdami —
+    // slad jest dodatkiem i jego brak nigdy nie wplywa na accepted_through.
+    telemetry::UploadOutcome outcome = toOutcome(status);
+    if (tracks == net::TrackOutcome::AuthRejected) {
+        outcome = telemetry::UploadOutcome::AuthRejected;
+    } else if (tracks == net::TrackOutcome::Retry &&
+               outcome == telemetry::UploadOutcome::Success) {
+        outcome = telemetry::UploadOutcome::TemporaryFailure;
+    }
+
+    g_scheduler.onOutcome(outcome, millis());
+    if (outcome == telemetry::UploadOutcome::AuthRejected) {
         Serial.println("[wysylka] token odrzucony - wysylka wstrzymana do zmiany konfiguracji");
     }
 }
@@ -1729,8 +1792,9 @@ void loop() {
     // a urzadzenie jeszcze nie zasnelo. W czuwaniu nie budzimy sie po to,
     // zeby wysylac — dwa dni czuwania sa wazniejsze.
     const bool radioAllowed = g_deviceState.state() == state::DeviceState::Cooldown;
-    if (g_scheduler.shouldAttempt(g_integration.isComplete(),
-                                  g_queue.pendingCount(g_history.count()) > 0, radioAllowed,
+    const bool anythingPending = g_queue.pendingCount(g_history.count()) > 0 ||
+                                 g_trackLogger.pendingCount() > 0;
+    if (g_scheduler.shouldAttempt(g_integration.isComplete(), anythingPending, radioAllowed,
                                   nowMs)) {
         runScheduledUpload();
         resumeAfterAction();

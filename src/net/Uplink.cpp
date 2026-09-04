@@ -131,4 +131,45 @@ UploadResult Uplink::postRides(const char* token, const char* payload) {
     return result;
 }
 
+TrackResult Uplink::postTrack(const char* token, const char* deviceId, uint32_t seq, Stream& body,
+                              size_t length) {
+    TrackResult result;
+    if (!isConnected()) return result;  // Retry — sieci nie bylo
+
+    char url[128];
+    std::snprintf(url, sizeof(url), "%s/%s/rides/%lu/track", cfg::kApiDevicesUrl, deviceId,
+                  static_cast<unsigned long>(seq));
+
+    WiFiClientSecure client;
+    client.setCACert(kRootCertPem);
+
+    HTTPClient http;
+    if (!http.begin(client, url)) return result;
+
+    addHeaders(http, token);
+    // Serwer wymaga typu zaczynajacego sie od "text/" — cokolwiek innego
+    // (w tym application/json z addHeaders) daje 415.
+    http.addHeader("Content-Type", "text/plain; charset=us-ascii");
+
+    // Strumien, nie bufor: plik idzie prosto z flasha malym buforkiem HTTPClienta.
+    result.httpCode = http.sendRequest("POST", &body, length);
+    http.end();
+
+    if (result.httpCode == 200) {
+        result.outcome = TrackOutcome::Delivered;
+    } else if (result.httpCode == 401 || result.httpCode == 403) {
+        result.outcome = TrackOutcome::AuthRejected;
+    } else if (result.httpCode == 413 || result.httpCode == 422) {
+        // Blad TRWALY: plik jest zepsuty albo za duzy. Ponawianie budziloby
+        // radio w kolko bez zadnej szansy na powodzenie.
+        result.outcome = TrackOutcome::Discard;
+    } else {
+        result.outcome = TrackOutcome::Retry;
+    }
+
+    Serial.printf("[wysylka] slad %lu (%lu B) -> %d\n", static_cast<unsigned long>(seq),
+                  static_cast<unsigned long>(length), result.httpCode);
+    return result;
+}
+
 }  // namespace net
