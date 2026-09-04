@@ -10,7 +10,7 @@
 //   │ PRAWE         38°           27°          │
 //   │ WIOOO        0.63 g        0.55 g        │
 //   │ PRRRR        0.82 g        0.71 g        │
-//   │ MAX         187 km/h      164 km/h       │  bez pomiaru "---"
+//   │ ZIUM        187 km/h      164 km/h       │  bez pomiaru "---"
 //   └──────────────────────────────────────────┘
 //
 // Rysowanie idzie przez sprite w PSRAM, zeby ekran nie migotal przy odswiezaniu.

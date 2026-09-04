@@ -25,7 +25,9 @@ const RowSpec kRows[layout::kRowCount] = {
     {"PRAWE", RowKind::Degrees, color::kLean,  &motion::RideValues::maxLeanRightDeg},
     {"WIOOO", RowKind::Force,   color::kAccel, &motion::RideValues::maxAccelG},
     {"PRRRR", RowKind::Force,   color::kBrake, &motion::RideValues::maxBrakeG},
-    {"MAX",   RowKind::Speed,   color::kSpeed, &motion::RideValues::maxSpeedKmh},
+    // ZIUM, nie MAX: "MAX" jest juz naglowkiem lewej kolumny (MAX OGOLNIE),
+    // wiec ta sama nazwa opisywalaby dwie rozne rzeczy na jednym ekranie.
+    {"ZIUM",  RowKind::Speed,   color::kSpeed, &motion::RideValues::maxSpeedKmh},
 };
 
 const char* unitFor(RowKind kind) {
