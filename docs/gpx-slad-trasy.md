@@ -105,11 +105,38 @@ się z prawdziwym torem jazdy*.
 4. Twarde ograniczniki: nie rzadziej niż co 60 s, nie częściej niż raz na sekundę.
 
 Efekt jest ten sam, o który chodziło w progach, ale wyprowadzony z geometrii —
-autostrada dostaje punkt co minutę, ciasny zakręt co sekundę, i skaluje się
+autostrada dostaje punkt co minutę, zakręt co kilka sekund, i skaluje się
 z prędkością sam z siebie. Do tego daje gwarancję, której progi nie dadzą:
 *ślad nigdzie nie odbiega od trasy więcej niż ε*.
 
 **ε ≈ 8 m, nie 5 m.** Przy 5 m sam szum GPS na prostej zaczyna wyzwalać zapisy.
+
+#### Zmierzone 2026-09-04 (`lib/track/TrackDecimator`, trasy syntetyczne)
+
+Liczba punktów w zależności od ε i od szumu GPS (odchylenie standardowe,
+niezależne w obu osiach):
+
+| szum | trasa | ε=3 m | ε=5 m | ε=8 m |
+|---|---|---|---|---|
+| brak | prosta 10 min @120 km/h (600 fixów) | 12 | 12 | 12 |
+| σ=2 m | prosta 10 min @120 km/h | 209 | 86 | **12** |
+| σ=3 m | prosta 10 min @120 km/h | 309 | 184 | **67** |
+| σ=2 m | nawrót r=20 m, 180° (8 fixów) | 5 | 3 | **3** |
+| σ=3 m | nawrót r=20 m, 180° | 7 | 3 | **3** |
+
+Dwa wnioski, oba nieoczywiste bez pomiaru:
+
+1. **Bez szumu ε nie ma znaczenia na prostej** — o liczbie punktów decyduje
+   wyłącznie twardy ogranicznik 60 s. Cały koszt zawężania korytarza bierze się
+   z szumu, nie z geometrii.
+2. **Przy realistycznym szumie zawężanie ε nic nie kupuje w zakręcie.** Ciasny
+   nawrót dostaje 3 punkty przy ε=5 i przy ε=8, bo szum jest porównywalny ze
+   ścięciem łuku. Za to na prostej ε=5 kosztuje siedmiokrotnie więcej punktów.
+
+Stąd: **ε=8 m potwierdzone pomiarem**, a nie tylko przeczuciem. Przy okazji
+obalony został wcześniejszy zapis „ciasny zakręt co sekundę" — z korytarzem
+ε=8 m i modułem 1 Hz zakręt dostaje punkt co ~4 s. To granica czujnika,
+nie algorytmu, i tak jest opisane w teście `test_zakret_dostaje_gesciej_niz_prosta`.
 
 Odległości liczyć w metrach na płaskiej siatce lokalnej; `cos(lat)` policzone raz
 na przejazd wystarczy (na 200 km trasy zmienia się o ~2%, przy korytarzu 8 m bez
@@ -236,12 +263,34 @@ czwarte pole można dołożyć później bez przebudowy.
 
 ---
 
-## 8. Otwarte, do rozstrzygnięcia przy pisaniu kontraktu
+## 8. Decyzje podjęte 2026-09-04 (start realizacji)
 
-- Kolejność pól i dokładny zapis znacznika przerwy między segmentami.
+- **Przechył JEST czwartym polem, od początku.** Korytarz zagęszcza punkty
+  dokładnie na zakrętach, czyli tam, gdzie IMU ma co powiedzieć — mapa trasy
+  pokolorowana kątem przechyłu jest ciekawsza niż sama prędkość maksymalna.
+  Koszt ~3 znaki na punkt. Decydujące było to, że API pisze się wtedy raz,
+  zamiast dokładać kolumnę i drugą wersję parsera za miesiąc.
+  Wartość w punkcie to **maksymalny przechył na odcinku** od poprzedniego
+  zapisanego punktu, ze znakiem (+ = w prawo), a nie chwilowy odczyt.
+- **Idziemy od razu korytarzem ε=8 m**, bez etapu przejściowego ze stałym
+  odstępem. Powód: korytarz pisze się i sprawdza BEZ GPS-a (test natywny na
+  syntetycznej trasie), więc pierwsza jazda testowa daje od razu dobry ślad.
+- **Włącznik śladu: formularz w portalu + komenda USB + próg na przycisku.**
+  Próg wchodzi **zaraz po włączniku alarmu**, więc drabinka KEY2 rośnie do
+  pięciu pozycji: alarm (klik) → **ŚLAD GPX (2–4 s)** → reset (4–6 s) →
+  kalibracja (6–8 s) → integracja (od 8 s).
+
+  **Kolejność wynika z częstości użycia, nie z przypadku** (decyzja
+  użytkownika): włączanie i wyłączanie alarmu oraz śladu to dwie najczęstsze
+  akcje, więc leżą najpłycej. Reset wyników jest sporadyczny — zeruje też
+  rekord prędkości. Kalibrację i integrację robi się praktycznie raz w życiu
+  urządzenia, więc **8 s przytrzymania do integracji jest kosztem przyjętym
+  świadomie**; notatka w `config.h` o męczących 10 s dotyczyła akcji, do
+  której wraca się regularnie.
+
+## 9. Nadal otwarte, do rozstrzygnięcia przy pisaniu kontraktu
+
+- Dokładny zapis znacznika przerwy między segmentami (kolejność pól jest już
+  ustalona: `dlon,dlat,dt,lean`).
 - Co robi urządzenie, gdy opcja śladu zostanie przełączona w trakcie przejazdu.
 - Zachowanie, gdy przejazd wypadł z historii, a jego ślad jeszcze leży na flashu.
-- Czy do śladu dokładamy maksymalny przechył na odcinku (czwarte pole). Korytarz
-  zagęszcza punkty dokładnie na zakrętach, czyli tam, gdzie IMU ma co powiedzieć —
-  dałoby to mapę trasy pokolorowaną kątem przechyłu, czyli ficzer wyraźnie
-  ciekawszy niż sama prędkość maksymalna. Koszt: ~3 znaki na punkt.
