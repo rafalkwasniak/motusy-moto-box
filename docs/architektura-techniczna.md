@@ -267,7 +267,14 @@ lepszą niż 1 km/h. To jedyna wartość na ekranie, której można ufać co do 
 
 **Ma stan „brak danych".** Pozostałe cztery zawsze coś pokazują. Prędkość bez modułu
 GPS nie ma czego pokazać — i `0 km/h` byłoby kłamstwem, bo wygląda jak wynik pomiaru.
-Dlatego wiersz wyświetla `---`, dopóki nie ma fixa.
+Dlatego wiersz wyświetla `---`, gdy **zapisany rekord wynosi zero**.
+
+O pustce decyduje wyłącznie rekord, nigdy bieżący stan odbiornika. Rozróżnienie
+jest istotne, bo zasilanie modułu jest odcinane poza jazdą (§2.5): warunek oparty
+na `hasFix()` gasił poprawnie zmierzone km/h w chwili zgaszenia stacyjki i na
+każdej stronie historii. Osobna bramka i tak nic nie wnosiła — brak fixa zostawia
+rekord na zerze, a podłoga 1 km/h (`motion::roundSpeedKmh`) gwarantuje, że zero
+oznacza wyłącznie brak pomiaru.
 
 ### Filtrowanie
 

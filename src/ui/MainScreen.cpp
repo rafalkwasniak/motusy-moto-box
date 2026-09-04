@@ -148,19 +148,21 @@ void MainScreen::drawRows(m5gfx::LovyanGFX* gfx, const MainScreenModel& model) {
         gfx->setTextColor(color::kMuted);
         gfx->drawString(row.label, layout::kLabelX, centerY);
 
-        // Bez modulu GPS wiersz predkosci nie ma czego pokazac; pusty slot
-        // historii nie ma czego pokazac w ogole. Kreski zamiast zera, bo
-        // "0 km/h" wygladaloby jak zmierzony wynik.
         const bool speedRow = row.kind == RowKind::Speed;
-        const bool speedUnavailable = speedRow && !model.speedAvailable;
 
         char text[12];
 
         // Zero w predkosci znaczy "nie bylo czym zmierzyc" (motion::Rounding.h:
-        // podloga wyniku to 1 km/h), wiec takze przy dzialajacym GPS-ie idzie
-        // jako kreski. Pozostale cztery wartosci pokazuja zero jako zero.
-        const bool leftEmpty = speedUnavailable || (speedRow && model.overall.*(row.field) <= 0.0f);
-        const bool rightEmpty = speedUnavailable || (speedRow && model.ride.*(row.field) <= 0.0f);
+        // podloga wyniku to 1 km/h), wiec idzie jako kreski. Pozostale cztery
+        // wartosci pokazuja zero jako zero.
+        //
+        // O pustce decyduje WYLACZNIE zapisany rekord, nigdy biezacy stan GPS-a.
+        // Bramka na hasFix() kasowala tu poprawne wyniki: zasilanie modulu jest
+        // odcinane poza jazda (§2.5), wiec po zgaszeniu stacyjki — i na kazdej
+        // stronie historii — zmierzone km/h zamienialy sie w kreski. Brak fixa
+        // i tak zostawia rekord na zerze, wiec osobny warunek niczego nie wnosil.
+        const bool leftEmpty = speedRow && model.overall.*(row.field) <= 0.0f;
+        const bool rightEmpty = speedRow && model.ride.*(row.field) <= 0.0f;
 
         if (!model.leftPresent || leftEmpty) {
             drawValue(gfx, layout::kOverallRightX, centerY, "---", nullptr, false, color::kZero);

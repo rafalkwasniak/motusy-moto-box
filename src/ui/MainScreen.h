@@ -10,7 +10,7 @@
 //   │ PRAWE         38°           27°          │
 //   │ WIOOO        0.63 g        0.55 g        │
 //   │ PRRRR        0.82 g        0.71 g        │
-//   │ MAX         187 km/h      164 km/h       │  wymaga GPS, inaczej "---"
+//   │ MAX         187 km/h      164 km/h       │  bez pomiaru "---"
 //   └──────────────────────────────────────────┘
 //
 // Rysowanie idzie przez sprite w PSRAM, zeby ekran nie migotal przy odswiezaniu.
@@ -44,10 +44,6 @@ struct MainScreenModel {
 
     bool alarmEnabled = false;
     bool mountCalibrated = false;
-
-    /// Czy modul GPS dostarcza predkosc. Bez niego wiersz PREDK pokazuje "---",
-    /// zeby nie sugerowac, ze rekord wynosi 0 km/h.
-    bool speedAvailable = false;
 
     bool externalPower = false;
     int batteryPercent = 0;

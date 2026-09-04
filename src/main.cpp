@@ -993,7 +993,6 @@ void refreshDisplay() {
         model.alarmEnabled = g_alarmEnabled;
         model.externalPower = g_power.isExternal();
         model.batteryPercent = M5.Power.getBatteryLevel();
-        model.speedAvailable = g_gps.hasFix(millis());
         g_mainScreen.draw(g_buffer, model);
         return;
     }
@@ -1049,9 +1048,6 @@ void refreshDisplay() {
     model.mountCalibrated = g_mount.isCalibrated();
     model.externalPower = g_power.isExternal();
     model.batteryPercent = M5.Power.getBatteryLevel();
-    // Wiersz predkosci pokazuje "---" dopoki nie ma fixa — zero wygladaloby
-    // jak zmierzony wynik (§3a).
-    model.speedAvailable = g_gps.hasFix(millis());
 
     static char stateLabel[16];
     const uint32_t untilOff = g_deviceState.msUntilScreenOff(millis());
