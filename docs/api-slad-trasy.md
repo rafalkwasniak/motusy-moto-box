@@ -4,6 +4,10 @@ Uzupełnienie [`api-telemetria.md`](api-telemetria.md). Ten dokument opisuje
 **drugi, niezależny endpoint**: ślad przejazdu. Zasady z tamtego kontraktu
 (token, `device_id`, HTTPS, brak kasowania) obowiązują tu bez zmian.
 
+**Co robi z tym działający serwer** — kody błędów co do sytuacji, ogranicznik
+żądań i zalecany przebieg wysyłki — opisuje
+[`api-jak-wysylac.md`](api-jak-wysylac.md).
+
 **Wersja formatu: 1** (`MMBT1`). Format zamrożony 2026-09-04 i pokryty testami
 w `test/test_track_format/` — napisy w tym dokumencie są tymi samymi napisami,
 które sprawdzają testy.
