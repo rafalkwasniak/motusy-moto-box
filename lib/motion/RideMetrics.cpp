@@ -13,7 +13,7 @@ void RideValues::raiseTo(const RideValues& other) {
 }
 
 bool RideMetrics::raiseRecord(float& record, float candidate, float minimum, float maximum) {
-    if (candidate < minimum || candidate > maximum) return false;
+    if (!isCredible(candidate, minimum, maximum)) return false;
     if (candidate <= record) return false;
     record = candidate;
     return true;

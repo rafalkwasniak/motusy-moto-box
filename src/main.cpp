@@ -32,6 +32,7 @@
 #include "RideClock.h"
 #include "TrackDecimator.h"
 #include "RideMetrics.h"
+#include "SegmentLean.h"
 #include "SpeedGate.h"
 #include "TelemetryJson.h"
 #include "UploadQueue.h"
@@ -68,6 +69,16 @@ motion::MountCalibration g_mount;
 motion::RideHistory g_history;
 /// Czas trwania biezacego przejazdu — od pierwszego do ostatniego ruchu.
 motion::RideClock g_rideClock;
+
+/// Najwiekszy przechyl na odcinku miedzy punktami sladu. Karmiony Z TEGO
+/// SAMEGO MIEJSCA I POD TYM SAMYM WARUNKIEM co rekordy przejazdu — to jest
+/// cala poprawka rozjazdu, w ktorym wynik mowil "lewo 8 stopni", a slad
+/// niosl -31.
+///
+/// Liczony NIEZALEZNIE od tego, czy slad jest wlaczony: kosztuje trzy
+/// porownania na probke, a dzieki temu wlaczenie GPX w trakcie jazdy dziala
+/// od razu i nie trzeba pamietac o drugim warunku w petli IMU.
+motion::SegmentLean g_segmentLean;
 
 /// Slad trasy: decymator (korytarz eps=8 m) i zapis na flashu.
 track::TrackDecimator g_decimator;
@@ -896,6 +907,9 @@ void startTrack() {
     g_trackGapOpen = false;
     g_trackTimeDecided = false;
     g_trackTimeOffsetS = 0;
+    // Nowy slad nie dziedziczy odcinka po poprzednim ani po czasie, w ktorym
+    // slad byl wylaczony.
+    g_segmentLean.reset();
 }
 
 /// Dokonczenie sladu przerwanego restartem w trakcie jazdy.
@@ -1091,7 +1105,14 @@ void pumpImu() {
         const bool recording =
             g_speedGate.isRecording(g_orientation.state().stationary, millis());
 
-        if (recording) g_metrics.update(g_orientation.state());
+        if (recording) {
+            g_metrics.update(g_orientation.state());
+            // Slad bierze przechyl STAD, a nie z wlasnego odczytu przy fixie
+            // GPS. Dwie sciezki czytajace to samo zrodlo pod roznymi warunkami
+            // daja dwie rozne liczby dla jednej jazdy — i uzytkownik nie ma jak
+            // rozstrzygnac, ktora klamie.
+            g_segmentLean.update(g_orientation.state().rollDeg());
+        }
 
         // Czas trwania liczymy z tego samego warunku co rekordy: manipulowanie
         // urzadzeniem na parkingu nie jest przejazdem. Przejazd zaczyna sie
@@ -1157,13 +1178,13 @@ void feedTrack(uint32_t nowMs) {
     fix.timeS = g_trackTimed ? epoch
                              : g_trackTimeOffsetS + (nowMs - g_trackBaseMs) / 1000;
 
-    // Przechyl ma sens tylko przy skalibrowanym montazu — bez kalibracji uklad
-    // odniesienia jest przypadkowy, wiec do sladu idzie zero zamiast smiecia.
-    if (g_mount.isCalibrated()) {
-        const float roll = g_orientation.state().rollDeg();
-        const int clamped = roll > 90.0f ? 90 : (roll < -90.0f ? -90 : static_cast<int>(roll));
-        fix.leanDeg = static_cast<int8_t>(clamped);
-    }
+    // Maksimum ze 100 Hz od poprzedniego punktu, a nie odczyt z tej jednej
+    // chwili. Zero znaczy "na tym odcinku nie bylo czego zapisac" — bo bramka
+    // predkosci byla zamknieta (§16), bo montaz nie jest skalibrowany, albo bo
+    // przechyl nie wyszedl poza szum estymaty. Wszystkie trzy warunki sa
+    // dziedziczone po rekordach przejazdu, wiec obie liczby moga sie roznic
+    // co najwyzej zaokragleniem.
+    fix.leanDeg = g_segmentLean.take();
 
     g_lastTrackFixMs = nowMs;
     g_trackGapOpen = false;

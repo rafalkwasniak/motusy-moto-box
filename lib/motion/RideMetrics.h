@@ -38,6 +38,16 @@ struct SpeedSample {
     bool valid = false;
 };
 
+/// Okno wiarygodnosci pomiaru: ponizej minimum to szum estymaty, powyzej
+/// maksimum blad estymacji albo uderzenie. JEDNA REGULA dla rekordow przejazdu
+/// i dla sladu trasy — gdy te dwie sciezki maja wlasne progi, uzytkownik widzi
+/// "lewo 8 stopni" w wyniku i -31 w sladzie, i nie ma jak rozstrzygnac, ktora
+/// liczba klamie. Ten sam powod, dla ktorego zaokraglanie ma jedno zrodlo
+/// w motion::Rounding.h.
+constexpr bool isCredible(float candidate, float minimum, float maximum) {
+    return candidate >= minimum && candidate <= maximum;
+}
+
 struct RideMetricsConfig {
     /// Ponizej tego progu wartosci traktujemy jako szum i nie zapisujemy
     /// jako rekordow — inaczej postoj na swiatlach ustanowilby "rekord" 0.4 stopnia.

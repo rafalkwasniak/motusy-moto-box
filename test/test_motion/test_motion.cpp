@@ -15,6 +15,8 @@
 #include "RideClock.h"
 #include "RideHistory.h"
 #include "RideMetrics.h"
+#include "Rounding.h"
+#include "SegmentLean.h"
 #include "SpeedGate.h"
 
 using namespace motion;
@@ -628,6 +630,75 @@ void test_history_keeps_recorded_at() {
     TEST_ASSERT_EQUAL_UINT32(1788000000u, history.recordedAtAt(1));
 }
 
+
+// ── Przechyl na odcinku sladu ──────────────────────────────────────────────
+
+void test_odcinek_bierze_maksimum_ze_znakiem() {
+    // Punkt sladu zastepuje caly odcinek, wiec ma niesc najmocniejszy przechyl
+    // z tego odcinka — nie odczyt z chwili, w ktorej przyszedl fix GPS.
+    SegmentLean lean;
+    lean.update(12.0f);
+    lean.update(-31.0f);
+    lean.update(20.0f);
+
+    TEST_ASSERT_EQUAL_INT(-31, lean.take());
+}
+
+void test_odcinek_odsiewa_szum_ponizej_progu() {
+    // Ponizej 3 stopni to szum estymaty, nie przechyl — ta sama granica,
+    // co dla rekordow przejazdu.
+    SegmentLean lean;
+    lean.update(2.0f);
+    lean.update(-1.5f);
+
+    TEST_ASSERT_EQUAL_INT(0, lean.take());
+}
+
+void test_odcinek_odrzuca_wartosci_niewiarygodne() {
+    // Powyzej 60 stopni to blad estymacji albo uderzenie, nie wyczyn.
+    SegmentLean lean;
+    lean.update(75.0f);
+    lean.update(28.0f);
+
+    TEST_ASSERT_EQUAL_INT(28, lean.take());
+}
+
+void test_take_zaczyna_nowy_odcinek() {
+    SegmentLean lean;
+    lean.update(-40.0f);
+    TEST_ASSERT_EQUAL_INT(-40, lean.take());
+
+    // Drugi odcinek nie moze odziedziczyc rekordu pierwszego.
+    lean.update(10.0f);
+    TEST_ASSERT_EQUAL_INT(10, lean.take());
+}
+
+void test_pusty_odcinek_oddaje_zero() {
+    SegmentLean lean;
+    TEST_ASSERT_EQUAL_INT(0, lean.take());
+}
+
+void test_odcinek_i_rekord_przejazdu_zgadzaja_sie() {
+    // Sedno calej poprawki: ten sam strumien probek, podany pod tym samym
+    // warunkiem, musi dac te sama liczbe w wyniku przejazdu i w sladzie.
+    // Rozjazd miedzy nimi jest bledem, ktory uzytkownik widzi jako "wynik
+    // mowi lewo 8 stopni, a slad -31".
+    RideMetrics metrics;
+    SegmentLean lean;
+
+    const float samples[] = {-4.0f, -18.0f, -31.4f, -12.0f, 6.0f};
+    for (float roll : samples) {
+        OrientationState state;
+        state.rollRad = degToRad(roll);
+        metrics.update(state);
+        lean.update(roll);
+    }
+
+    // Rekord przejazdu trzyma przechyl w lewo jako wartosc dodatnia, slad
+    // jako ujemna — poza znakiem musi to byc ta sama liczba.
+    TEST_ASSERT_EQUAL_INT(roundHalfUp(metrics.currentRide().maxLeanLeftDeg), -lean.take());
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
 
@@ -646,6 +717,12 @@ int main(int, char**) {
 
     RUN_TEST(test_new_ride_clears_session_but_keeps_overall);
     RUN_TEST(test_reset_clears_both_sets);
+    RUN_TEST(test_odcinek_bierze_maksimum_ze_znakiem);
+    RUN_TEST(test_odcinek_odsiewa_szum_ponizej_progu);
+    RUN_TEST(test_odcinek_odrzuca_wartosci_niewiarygodne);
+    RUN_TEST(test_take_zaczyna_nowy_odcinek);
+    RUN_TEST(test_pusty_odcinek_oddaje_zero);
+    RUN_TEST(test_odcinek_i_rekord_przejazdu_zgadzaja_sie);
     RUN_TEST(test_implausible_values_are_rejected);
     RUN_TEST(test_speed_record_needs_valid_fix);
     RUN_TEST(test_speed_record_rejects_noise_and_glitches);
