@@ -288,9 +288,20 @@ czwarte pole można dołożyć później bez przebudowy.
   świadomie**; notatka w `config.h` o męczących 10 s dotyczyła akcji, do
   której wraca się regularnie.
 
-## 9. Nadal otwarte, do rozstrzygnięcia przy pisaniu kontraktu
+## 9. Kontrakt — rozstrzygnięte
 
-- Dokładny zapis znacznika przerwy między segmentami (kolejność pól jest już
-  ustalona: `dlon,dlat,dt,lean`).
-- Co robi urządzenie, gdy opcja śladu zostanie przełączona w trakcie przejazdu.
-- Zachowanie, gdy przejazd wypadł z historii, a jego ślad jeszcze leży na flashu.
+Wszystkie punkty z tej listy zostały domknięte 2026-09-04 i spisane w
+[`api-slad-trasy.md`](api-slad-trasy.md), razem z parserem dla Laravela:
+
+- **Znacznik przerwy**: linia zawierająca wyłącznie `-`. Znaczy „podnieś
+  ołówek"; przyrosty płyną dalej przez przerwę, bo zerowanie sumowania
+  wymagałoby powtarzania pozycji bezwzględnej.
+- **Przełączenie opcji w trakcie jazdy**: włączenie zaczyna ślad od tej chwili,
+  wyłączenie domyka plik i to, co zebrane, i tak jedzie na serwer.
+- **Przejazd wypadły z historii**: ślad żyje tak długo jak przejazd (10 wpisów).
+  Jedenasty wypycha najstarszy razem ze śladem, także niewysłanym — ślad jest
+  dodatkiem i nie warto dla niego komplikować cyklu życia historii.
+- **Adresowanie**: `POST /api/v1/devices/{device_id}/rides/{seq}/track`.
+  `seq` jest w adresie, bo numer nadaje się przy archiwizacji, czyli PO jeździe,
+  a plik powstaje w jej trakcie.
+- **Ciało żądania to plik z flasha bajt w bajt** — jeden format, nie dwa.

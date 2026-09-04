@@ -9,6 +9,10 @@ bo taka zmiana wymaga ruszenia także drugiej strony.
 Wersja: 2 (2026-09-01). Zmiana wobec wersji 1: **przechył i prędkość są teraz
 liczbami całkowitymi**, nie ułamkowymi — patrz sekcja 3.
 
+**Ślad trasy ma osobny kontrakt: [`api-slad-trasy.md`](api-slad-trasy.md).**
+Jest niezależnym, opcjonalnym dodatkiem — nie zmienia niczego w tym dokumencie
+i jego brak nigdy nie blokuje `accepted_through`.
+
 ---
 
 ## 1. Zasady
