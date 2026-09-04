@@ -82,6 +82,9 @@ bool g_trackGapOpen = false;
 bool g_trackTimed = false;
 bool g_trackTimeDecided = false;
 uint32_t g_trackBaseMs = 0;
+/// Od ilu sekund liczyc slad bez czasu z GPS. Rozne od zera wylacznie po
+/// wznowieniu: czas w pliku nie moze sie cofnac, bo ujemne dt to 422.
+uint32_t g_trackTimeOffsetS = 0;
 /// §16 — pomiary zapisujemy dopiero powyzej progu predkosci. Bez tego przechyl
 /// przy manewrowaniu ustanawia rekord calej sesji.
 motion::SpeedGate g_speedGate;
@@ -300,11 +303,14 @@ void archiveCurrentRide() {
 
     // Slad dostaje ten sam numer. Dopiero tutaj jest znany — plik powstawal
     // w trakcie jazdy pod nazwa robocza.
-    if (g_trackLogger.isRecording()) {
-        track::Point tail;
-        if (g_decimator.flush(tail)) g_trackLogger.write(tail, millis());
-        g_trackLogger.finishRide(g_queue.lastSeq());
+    track::Point tail;
+    if (g_trackLogger.isRecording() && g_decimator.flush(tail)) {
+        g_trackLogger.write(tail, millis());
     }
+    // Bez warunku na isRecording(): przy starcie z zasilaniem archiwizujemy
+    // przejazd sprzed restartu, a logger dopiero co wstal i jeszcze nie pisze.
+    // O tym, czy jest co domykac, decyduje istnienie pliku roboczego.
+    g_trackLogger.finishRide(g_queue.lastSeq());
 
     g_store.saveHistory(g_history);
     g_store.saveUploadState(g_queue.lastSeq(), g_queue.sentThrough());
@@ -826,6 +832,35 @@ void startTrack() {
     g_lastTrackFixMs = 0;
     g_trackGapOpen = false;
     g_trackTimeDecided = false;
+    g_trackTimeOffsetS = 0;
+}
+
+/// Dokonczenie sladu przerwanego restartem w trakcie jazdy.
+void resumeTrack() {
+    const tracklog::TrackResume resume = g_trackLogger.resumeRide(trackHeader());
+    if (!resume.ok) {
+        Serial.println("[slad] pliku roboczego nie da sie odczytac - skasowany");
+        return;
+    }
+
+    // Tryb czasu bierzemy Z PLIKU, nie z modulu. Serwer traktuje t0=0 jako
+    // "caly slad bez czasu", wiec slad zaczety bez czasu musi bez niego zostac,
+    // choćby GPS zdazyl go tymczasem podac.
+    g_trackTimed = resume.timed;
+    g_trackTimeDecided = true;
+    g_trackTimeOffsetS = resume.timed ? 0 : resume.last.timeS;
+    g_trackBaseMs = millis();
+
+    // Przerwa w miejscu restartu: przez ten czas urzadzenie nie wiedzialo,
+    // gdzie jest, wiec mapa nie ma prawa narysowac tam linii prostej.
+    g_decimator.reset();
+    g_decimator.breakSegment();
+    g_lastTrackFixMs = 0;
+    g_trackGapOpen = false;
+
+    Serial.printf("[slad] wznowiony po restarcie: %lu punktow, czas %s\n",
+                  static_cast<unsigned long>(resume.points),
+                  resume.timed ? "z GPS" : "wzgledny");
 }
 
 /// §22.1 — przelaczenie modulu alarmowego.
@@ -1056,7 +1091,8 @@ void feedTrack(uint32_t nowMs) {
     track::Fix fix;
     fix.lonE5 = g_gps.lonE5();
     fix.latE5 = g_gps.latE5();
-    fix.timeS = g_trackTimed ? epoch : (nowMs - g_trackBaseMs) / 1000;
+    fix.timeS = g_trackTimed ? epoch
+                             : g_trackTimeOffsetS + (nowMs - g_trackBaseMs) / 1000;
 
     // Przechyl ma sens tylko przy skalibrowanym montazu — bez kalibracji uklad
     // odniesienia jest przypadkowy, wiec do sladu idzie zero zamiast smiecia.
@@ -1482,7 +1518,14 @@ void setup() {
 
     g_power.begin(millis());
     g_deviceState.begin(g_power.isExternal(), millis());
-    restoreState(g_power.isExternal());
+    // KOLEJNOSC MA ZNACZENIE: system plikow sladu musi stac PRZED
+    // restoreState(). Start z zasilaniem archiwizuje tam przejazd sprzed
+    // restartu i nadaje mu numer — a wtedy jego slad, lezacy jeszcze w pliku
+    // roboczym, ma dostac dokladnie ten numer.
+    g_trackLogger.begin();
+
+    const bool externalPowerAtBoot = g_power.isExternal();
+    restoreState(externalPowerAtBoot);
 
 #ifdef MMB_BENCH
     // Test stanowiskowy wymaga wlaczonego modulu alarmu — wymuszenie naprawia
@@ -1493,10 +1536,24 @@ void setup() {
     }
 #endif
 
-    // Slad trasy dzieli partycje i system plikow z rejestratorem surowych
-    // danych. Boot z zasilaniem znaczy trwajaca jazde — zdarzenie RideStarted
-    // juz nie padnie, wiec slad otwieramy tutaj.
-    if (g_trackLogger.begin() && g_trackEnabled &&
+    // Plik roboczy zastany na flashu. Rozroznienie jest tu cala rzecza:
+    //
+    //   restart na baterii  -> przejazd TRWA (§25), slad nalezy do niego
+    //                          i ma byc dokonczony,
+    //   start z zasilaniem  -> stacyjka wlasnie zostala wlaczona, poprzedni
+    //                          przejazd zostal wyzej zarchiwizowany razem ze
+    //                          sladem, wiec cokolwiek zostalo jest sierota.
+    if (g_trackLogger.hasWorkFile()) {
+        if (!externalPowerAtBoot && g_trackEnabled) {
+            resumeTrack();
+        } else {
+            g_trackLogger.discardWorkFile();
+        }
+    }
+
+    // Boot z zasilaniem znaczy trwajaca jazde — zdarzenie RideStarted juz nie
+    // padnie, wiec slad otwieramy tutaj.
+    if (!g_trackLogger.isRecording() && g_trackEnabled &&
         g_deviceState.state() == state::DeviceState::Riding) {
         startTrack();
     }

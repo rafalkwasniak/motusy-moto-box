@@ -92,11 +92,67 @@ public:
     ///         albo gdy `begin()` jeszcze nie bylo.
     size_t append(const Point& point, char* out, size_t outSize);
 
+    /// Wznawia pisanie do ISTNIEJACEGO pliku: ustawia punkt odniesienia dla
+    /// kolejnych delt, nie pisac naglowka drugi raz. Uzywane po restarcie
+    /// w trakcie przejazdu — patrz `TrackScanner`.
+    void resume(const Point& last);
+
     bool started() const { return started_; }
 
 private:
     Point previous_{};
     bool started_ = false;
+};
+
+/// Czyta zapisany slad linia po linii i odtwarza jego stan koncowy.
+///
+/// PO CO: restart w trakcie jazdy (zanik zasilania, watchdog, rozladowana
+/// bateria) zostawia na flashu plik bez numeru przejazdu. Kasowanie go byloby
+/// najprostsze i najgorsze — w piatej godzinie trasy kosztowaloby cala trase,
+/// czyli dokladnie to, przed czym mial chronic zapis na flash zamiast do RAM.
+/// Zeby pisac dalej, trzeba znac ostatni zapisany punkt: delty licza sie
+/// wzgledem niego, a w pliku sa tylko przyrosty.
+///
+/// Skanera uzywa sie takze do sprawdzenia, czy plik w ogole jest caly:
+/// linia, ktorej nie da sie przeczytac, konczy skanowanie. Przy zapisie
+/// sekwencyjnym uszkodzona moze byc wylacznie OSTATNIA linia (przerwany zapis),
+/// wiec wszystko przed nia jest dobre i warte zachowania.
+class TrackScanner {
+public:
+    void reset();
+
+    /// Podaje jedna linie pliku, BEZ znaku konca linii.
+    /// @return false gdy linia jest niepoprawna — od tego miejsca plik
+    ///         nadaje sie tylko do obciecia.
+    bool feedLine(const char* line);
+
+    /// Czy naglowek zostal przeczytany w calosci i plik ma punkt startowy.
+    bool ready() const { return ready_; }
+
+    /// Ostatni zapisany punkt. Sensowny dopiero przy `ready()`.
+    const Point& last() const { return last_; }
+
+    /// Czy slad niesie prawdziwy czas UTC (`t0` rozne od zera). Wznawiajac,
+    /// trzeba zostac przy tym samym trybie: serwer traktuje `t0=0` jako
+    /// "caly slad bez czasu", wiec mieszanka nie ma jak zaistniec.
+    bool timed() const { return timed_; }
+
+    /// Ile punktow (bez startowego) juz jest w pliku.
+    uint32_t points() const { return points_; }
+
+private:
+    bool sawMagic_ = false;
+    bool inHeader_ = true;
+    bool ready_ = false;
+    bool timed_ = false;
+
+    int32_t startLon_ = 0;
+    int32_t startLat_ = 0;
+    uint32_t startTime_ = 0;
+    bool sawStart_ = false;
+
+    Point last_{};
+    uint32_t points_ = 0;
 };
 
 }  // namespace track

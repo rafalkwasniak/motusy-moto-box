@@ -13,6 +13,10 @@ constexpr const char* kPartitionLabel = "storage";
 /// Plik biezacego przejazdu. Stala nazwa, bo numeru jeszcze nie znamy.
 constexpr const char* kWorkFile = "/trk_cur.txt";
 
+/// Plik pomocniczy przy przycinaniu sladu po przerwanym zapisie. Nazwa celowo
+/// nie pasuje do wzorca `trk_<numer>.txt`, wiec nie liczy sie jako slad.
+constexpr const char* kTempFile = "/trk_tmp.txt";
+
 /// Nazwa domknietego sladu: /trk_51.txt
 void trackName(char* out, size_t size, uint32_t seq) {
     std::snprintf(out, size, "/trk_%lu.txt", static_cast<unsigned long>(seq));
@@ -50,17 +54,121 @@ bool TrackLogger::begin() {
     mounted_ = LittleFS.begin(true, "/littlefs", 10, kPartitionLabel);
     if (!mounted_) return false;
 
-    // Plik roboczy zastany przy starcie to slad przejazdu, ktory nie zostal
-    // domkniety — restart na baterii albo zanik zasilania w trakcie zapisu.
-    // Bez numeru przejazdu nie da sie go do niczego przypisac, wiec idzie
-    // do kosza zamiast zajmowac miejsce w nieskonczonosc.
-    if (LittleFS.exists(kWorkFile)) LittleFS.remove(kWorkFile);
+    // Niedokonczone przyciecie z poprzedniego startu. Plik roboczy jest wtedy
+    // nietkniety, wiec zostaje tylko posprzatac po sobie.
+    if (LittleFS.exists(kTempFile)) LittleFS.remove(kTempFile);
 
+    // Pliku roboczego NIE ruszamy: o tym, czy to sierota, czy przerwany
+    // przejazd, wie wylacznie wolajacy.
     return true;
+}
+
+bool TrackLogger::hasWorkFile() const {
+    return mounted_ && LittleFS.exists(kWorkFile);
+}
+
+void TrackLogger::discardWorkFile() {
+    if (mounted_ && LittleFS.exists(kWorkFile)) LittleFS.remove(kWorkFile);
+}
+
+TrackResume TrackLogger::resumeRide(const track::TrackHeader& header) {
+    TrackResume result;
+    if (!mounted_ || !LittleFS.exists(kWorkFile)) return result;
+
+    abortRideState();
+
+    File source = LittleFS.open(kWorkFile, FILE_READ);
+    if (!source) return result;
+
+    File target = LittleFS.open(kTempFile, FILE_WRITE);
+    if (!target) {
+        source.close();
+        return result;
+    }
+
+    // Przepisujemy wylacznie linie, ktore skaner przyjal. Przy zapisie
+    // sekwencyjnym uszkodzona moze byc tylko ostatnia — a ogon, ktorego serwer
+    // nie zparsuje, uniewaznilby CALA przesylke, nie samego siebie.
+    track::TrackScanner scanner;
+    scanner.reset();
+
+    char line[160];
+    size_t length = 0;
+    bool truncated = false;
+
+    while (source.available() && !truncated) {
+        const int c = source.read();
+        if (c < 0) break;
+
+        if (c == '\n') {
+            line[length] = '\0';
+            if (!scanner.feedLine(line)) {
+                truncated = true;
+                break;
+            }
+            target.write(reinterpret_cast<const uint8_t*>(line), length);
+            target.write(static_cast<uint8_t>('\n'));
+            length = 0;
+            continue;
+        }
+
+        if (c == '\r') continue;  // tolerancja na CRLF
+
+        if (length + 1 >= sizeof(line)) {
+            truncated = true;  // linia dluzsza niz format dopuszcza
+            break;
+        }
+        line[length++] = static_cast<char>(c);
+    }
+    // Ogon bez znaku konca linii to przerwany zapis — po prostu go nie ma.
+
+    const uint32_t kept = static_cast<uint32_t>(target.size());
+    source.close();
+    target.close();
+
+    if (!scanner.ready()) {
+        LittleFS.remove(kTempFile);
+        LittleFS.remove(kWorkFile);
+        return result;
+    }
+
+    LittleFS.remove(kWorkFile);
+    if (!LittleFS.rename(kTempFile, kWorkFile)) {
+        LittleFS.remove(kTempFile);
+        return result;
+    }
+
+    file_ = LittleFS.open(kWorkFile, FILE_APPEND);
+    if (!file_) return result;
+
+    std::snprintf(deviceId_, sizeof(deviceId_), "%s", header.deviceId);
+    std::snprintf(firmware_, sizeof(firmware_), "%s", header.firmware);
+    header_.deviceId = deviceId_;
+    header_.firmware = firmware_;
+    header_.corridorM = header.corridorM;
+
+    // Naglowek juz w pliku jest — writer ma dopisywac delty wzgledem
+    // odtworzonego punktu, a nie zaczynac od nowa.
+    writer_.reset();
+    writer_.resume(scanner.last());
+
+    recording_ = true;
+    open_ = true;
+    fill_ = 0;
+    points_ = scanner.points();
+    bytes_ = kept;
+
+    result.ok = true;
+    result.last = scanner.last();
+    result.timed = scanner.timed();
+    result.points = scanner.points();
+    return result;
 }
 
 void TrackLogger::startRide(const track::TrackHeader& header) {
     if (!mounted_) return;
+    // Nowy przejazd zaczyna od czystego pliku: cokolwiek zostalo, nalezy
+    // do poprzedniego i albo dostalo juz numer, albo jest sierota.
     abortRide();
 
     std::snprintf(deviceId_, sizeof(deviceId_), "%s", header.deviceId);
@@ -129,9 +237,7 @@ void TrackLogger::flushBuffer() {
 }
 
 bool TrackLogger::finishRide(uint32_t seq) {
-    if (!recording_) return false;
-
-    const bool haveTrack = open_ && points_ > 0;
+    if (!mounted_) return false;
 
     if (open_) {
         flushBuffer();
@@ -142,10 +248,11 @@ bool TrackLogger::finishRide(uint32_t seq) {
     recording_ = false;
     writer_.reset();
 
-    if (!haveTrack) {
-        if (LittleFS.exists(kWorkFile)) LittleFS.remove(kWorkFile);
-        return false;
-    }
+    // O tym, czy jest co domykac, decyduje ISTNIENIE PLIKU, a nie to, czy
+    // logger akurat pisal. Przy starcie z zasilaniem urzadzenie archiwizuje
+    // przejazd sprzed restartu — jego slad lezy wtedy na flashu, a logger
+    // dopiero co wstal i niczego jeszcze nie zapisal.
+    if (!LittleFS.exists(kWorkFile)) return false;
 
     char name[24];
     trackName(name, sizeof(name), seq);
@@ -157,12 +264,15 @@ bool TrackLogger::finishRide(uint32_t seq) {
 }
 
 void TrackLogger::abortRide() {
+    abortRideState();
+    discardWorkFile();
+}
+
+void TrackLogger::abortRideState() {
     if (open_) {
         file_.close();
         open_ = false;
     }
-    if (mounted_ && LittleFS.exists(kWorkFile)) LittleFS.remove(kWorkFile);
-
     recording_ = false;
     writer_.reset();
     fill_ = 0;

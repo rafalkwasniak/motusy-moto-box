@@ -272,6 +272,140 @@ void test_reset_wymaga_ponownego_naglowka() {
                                               sizeof(out)));
 }
 
+
+// ── Wznowienie po restarcie ────────────────────────────────────────────────
+
+namespace {
+
+/// Podaje caly plik skanerowi, linia po linii.
+/// @return liczba linii przyjetych, zanim ktoras zostala odrzucona.
+size_t scanAll(TrackScanner& scanner, const std::string& file) {
+    size_t accepted = 0;
+    size_t pos = 0;
+    while (pos < file.size()) {
+        const size_t end = file.find('\n', pos);
+        const bool complete = end != std::string::npos;
+        const std::string row = file.substr(pos, complete ? end - pos : std::string::npos);
+
+        // Linia bez zakonczenia to przerwany zapis — nie podajemy jej dalej.
+        if (!complete) break;
+        if (!scanner.feedLine(row.c_str())) break;
+
+        ++accepted;
+        pos = end + 1;
+    }
+    return accepted;
+}
+
+std::string sampleFile() {
+    return "MMBT1\n"
+           "dev=70041ddc6bc8\n"
+           "fw=1.0.0\n"
+           "eps=8\n"
+           "t0=1757001234\n"
+           "p0=1957648,5133528\n"
+           "\n"
+           "113,-182,5,12\n"
+           "26,-3,1,-31\n"
+           "-\n"
+           "340,84,900,0\n";
+}
+
+}  // namespace
+
+void test_skaner_odtwarza_ostatni_punkt() {
+    TrackScanner scanner;
+    scanner.reset();
+    scanAll(scanner, sampleFile());
+
+    TEST_ASSERT_TRUE(scanner.ready());
+    TEST_ASSERT_TRUE(scanner.timed());
+    TEST_ASSERT_EQUAL_UINT32(3, scanner.points());
+    TEST_ASSERT_EQUAL_INT32(1958127, scanner.last().lonE5);
+    TEST_ASSERT_EQUAL_INT32(5133427, scanner.last().latE5);
+    TEST_ASSERT_EQUAL_UINT32(1757002140, scanner.last().timeS);
+}
+
+void test_urwany_zapis_nie_uniewaznia_calego_pliku() {
+    // Zanik zasilania w trakcie zapisu tnie OSTATNIA linie. Wszystko przed nia
+    // jest dobre i ma zostac — kasowanie calosci kosztowaloby cala trase,
+    // czyli dokladnie to, przed czym mial chronic zapis na flash.
+    std::string file = sampleFile();
+    file += "340,84";  // linia bez konca i bez nowej linii
+
+    TrackScanner scanner;
+    scanner.reset();
+    const size_t accepted = scanAll(scanner, file);
+
+    TEST_ASSERT_TRUE(scanner.ready());
+    TEST_ASSERT_EQUAL_UINT32(3, scanner.points());
+    TEST_ASSERT_EQUAL_INT32(1958127, scanner.last().lonE5);
+    // Wszystkie kompletne linie przyjete: magia + 5 naglowka + pusta + 4 punkty.
+    TEST_ASSERT_EQUAL_UINT32(11, accepted);
+}
+
+void test_uszkodzona_linia_konczy_skanowanie() {
+    std::string file = sampleFile();
+    file += "340,84,to-nie-liczba,0\n";
+    file += "10,10,1,0\n";
+
+    TrackScanner scanner;
+    scanner.reset();
+    scanAll(scanner, file);
+
+    // Punkt po uszkodzonej linii NIE moze zostac doliczony: delty licza sie
+    // po kolei, wiec za dziura wszystko jest przesuniete.
+    TEST_ASSERT_EQUAL_UINT32(3, scanner.points());
+}
+
+void test_slad_bez_czasu_jest_rozpoznany() {
+    std::string file = sampleFile();
+    file.replace(file.find("t0=1757001234"), std::strlen("t0=1757001234"), "t0=0");
+
+    TrackScanner scanner;
+    scanner.reset();
+    scanAll(scanner, file);
+
+    TEST_ASSERT_TRUE(scanner.ready());
+    TEST_ASSERT_FALSE_MESSAGE(scanner.timed(), "t0=0 znaczy slad bez czasu");
+}
+
+void test_plik_bez_magii_jest_odrzucany() {
+    TrackScanner scanner;
+    scanner.reset();
+    TEST_ASSERT_FALSE(scanner.feedLine("MMBT9"));
+    TEST_ASSERT_FALSE(scanner.ready());
+}
+
+void test_naglowek_bez_punktu_startowego_jest_bezuzyteczny() {
+    TrackScanner scanner;
+    scanner.reset();
+    TEST_ASSERT_TRUE(scanner.feedLine("MMBT1"));
+    TEST_ASSERT_TRUE(scanner.feedLine("dev=70041ddc6bc8"));
+    TEST_ASSERT_TRUE(scanner.feedLine("t0=1757001234"));
+    TEST_ASSERT_FALSE_MESSAGE(scanner.feedLine(""), "bez p0 nie ma od czego liczyc delt");
+    TEST_ASSERT_FALSE(scanner.ready());
+}
+
+void test_wznowienie_pisze_delty_wzgledem_odtworzonego_punktu() {
+    // Calosc mechanizmu: skaner odtwarza stan, writer pisze dalej do tego
+    // samego pliku, a punkt po restarcie zaczyna nowy segment.
+    TrackScanner scanner;
+    scanner.reset();
+    scanAll(scanner, sampleFile());
+
+    TrackWriter writer;
+    writer.resume(scanner.last());
+    TEST_ASSERT_TRUE(writer.started());
+
+    char out[64];
+    Point next = pointAt(1958240, 5133245, 1757002145, 7, true);
+    const size_t length = writer.append(next, out, sizeof(out));
+
+    TEST_ASSERT_TRUE(length > 0);
+    TEST_ASSERT_EQUAL_STRING("-\n113,-182,5,7\n", out);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_naglowek_znak_w_znak);
@@ -285,5 +419,12 @@ int main() {
     RUN_TEST(test_za_maly_bufor_nie_pisze_polowy_punktu);
     RUN_TEST(test_punkt_bez_naglowka_jest_odrzucany);
     RUN_TEST(test_reset_wymaga_ponownego_naglowka);
+    RUN_TEST(test_skaner_odtwarza_ostatni_punkt);
+    RUN_TEST(test_urwany_zapis_nie_uniewaznia_calego_pliku);
+    RUN_TEST(test_uszkodzona_linia_konczy_skanowanie);
+    RUN_TEST(test_slad_bez_czasu_jest_rozpoznany);
+    RUN_TEST(test_plik_bez_magii_jest_odrzucany);
+    RUN_TEST(test_naglowek_bez_punktu_startowego_jest_bezuzyteczny);
+    RUN_TEST(test_wznowienie_pisze_delty_wzgledem_odtworzonego_punktu);
     return UNITY_END();
 }

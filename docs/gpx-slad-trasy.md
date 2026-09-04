@@ -198,6 +198,39 @@ Rozmiar: 40 kB na przejazd × 10 przejazdów historii = ~400 kB. Mieści się be
 kompromisów, więc **ślad trzymamy dla tylu przejazdów, ile trzyma historia** —
 ale to decyzja świadoma, a nie coś do odkrycia przy pełnej partycji.
 
+### Restart w trakcie jazdy (poprawka 2026-09-04)
+
+Numer przejazdu nadaje się przy archiwizacji, więc ślad powstaje pod nazwą
+roboczą. Pierwsza wersja kasowała plik roboczy przy każdym starcie — jako
+sierotę bez numeru. **To przekreślało cały sens zapisu na flash**: restart
+w piątej godzinie kosztował wtedy całą trasę, czyli dokładnie to, przed czym
+zapis na flash miał chronić.
+
+Rozróżnienie, którego brakowało:
+
+| Start | Co to znaczy | Co z plikiem roboczym |
+|---|---|---|
+| na baterii | przejazd **trwa** (§25), stacyjka się nie zmieniła | dokończyć |
+| z zasilaniem | stacyjka właśnie włączona, poprzedni przejazd archiwizowany | dostał numer razem z przejazdem |
+
+Dokończenie wymaga odtworzenia ostatniego zapisanego punktu — w pliku są same
+przyrosty, więc trzeba je zsumować od `p0`. Robi to `track::TrackScanner`,
+czysty C++ z testami natywnymi.
+
+Przy okazji plik jest **przycinany do ostatniej całej linii**. Przerwany zapis
+może zostawić ogon bez zakończenia, a linia, której serwer nie sparsuje,
+unieważnia **całą** przesyłkę, nie samą siebie (kontrakt: 422 kasuje plik).
+
+Dwie rzeczy, które muszą przetrwać restart razem ze śladem:
+
+- **tryb czasu** — `t0=0` znaczy dla serwera „cały ślad bez czasu", więc ślad
+  zaczęty bez czasu musi bez niego zostać, choćby GPS zdążył go tymczasem podać;
+- **ciągłość czasu** — po wznowieniu bez czasu z GPS liczymy sekundy dalej od
+  ostatniej zapisanej, bo ujemne `dt` to 422.
+
+Miejsce restartu dostaje znacznik przerwy: przez ten czas urządzenie nie
+wiedziało, gdzie jest, więc mapa nie ma prawa narysować tam linii prostej.
+
 ---
 
 ## 5. Wysyłka

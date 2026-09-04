@@ -11,8 +11,14 @@
 //
 // NUMER PRZEJAZDU NADAJE SIE PO JEZDZIE, a plik powstaje w jej trakcie —
 // stad plik roboczy o stalej nazwie, przemianowywany dopiero przy archiwizacji.
-// Plik roboczy zastany przy starcie znaczy "poprzedni przejazd nie zostal
-// domkniety" i jest kasowany: bez numeru nie da sie go do niczego przypisac.
+//
+// PLIK ROBOCZY ZASTANY PRZY STARCIE NIE JEST SMIECIEM. Restart w trakcie jazdy
+// (zanik zasilania, watchdog, rozladowana bateria) zostawia slad bez numeru,
+// ale przejazd, do ktorego nalezy, przezywa restart w NVS — wiec slad da sie
+// dokonczyc. Kasowanie takiego pliku byloby najprostsze i najgorsze: w piatej
+// godzinie trasy kosztowaloby cala trase, czyli dokladnie to, przed czym mial
+// chronic zapis na flash zamiast do RAM. `resumeRide()` odtwarza stan i pisze
+// dalej; `discardWorkFile()` jest dla prawdziwych sierot.
 //
 // Ta sama partycja i ten sam system plikow co RawLogger. Oba moduly wolaja
 // LittleFS.begin() — drugie wywolanie na zamontowanym systemie nic nie kosztuje.
@@ -25,6 +31,17 @@
 #include "TrackFormat.h"
 
 namespace tracklog {
+
+/// Wynik wznowienia zapisu po restarcie.
+struct TrackResume {
+    bool ok = false;
+    /// Ostatni punkt zapisany przed restartem — od niego licza sie dalsze delty.
+    track::Point last{};
+    /// Czy slad niesie prawdziwy czas UTC. Tryb MUSI zostac ten sam, bo
+    /// serwer traktuje `t0=0` jako "caly slad bez czasu".
+    bool timed = false;
+    uint32_t points = 0;
+};
 
 class TrackLogger {
 public:
@@ -42,10 +59,24 @@ public:
     /// zasilania — przy jednym punkcie na kilka sekund to jeden, moze dwa punkty.
     static constexpr uint32_t kFlushIntervalMs = 5000;
 
-    /// Montuje system plikow na partycji "storage".
+    /// Montuje system plikow na partycji "storage". NIE rusza pliku roboczego —
+    /// o jego losie decyduje wolajacy, bo tylko on wie, czy przejazd trwa.
     /// @return false gdy partycja niedostepna — logger pozostaje niemy.
     bool begin();
     bool isMounted() const { return mounted_; }
+
+    /// Czy na flashu lezy niedomkniety slad.
+    bool hasWorkFile() const;
+
+    /// Kasuje plik roboczy. Wolac wylacznie dla sieroty — czyli sladu
+    /// przejazdu, ktory zostal juz zarchiwizowany albo nigdy nie wroci.
+    void discardWorkFile();
+
+    /// Wznawia zapis do zastanego pliku roboczego po restarcie w trakcie jazdy.
+    /// Plik jest przy okazji przycinany do ostatniej CALEJ linii — przerwany
+    /// zapis moze zostawic ogon, ktory uniewaznilby cala przesylke.
+    /// @return `ok == false` gdy pliku nie ma albo nie da sie go odczytac.
+    TrackResume resumeRide(const track::TrackHeader& header);
 
     /// Nowy przejazd. Plik powstaje dopiero przy PIERWSZYM punkcie: przejazd
     /// bez zasiegu satelitow nie ma zostawiac pustego pliku na flashu.
@@ -78,6 +109,8 @@ public:
 
 private:
     void openFile();
+    /// Czysci stan zapisu, NIE ruszajac pliku na flashu.
+    void abortRideState();
     void flushBuffer();
     /// Usuwa najstarsze slady, az bedzie `kReserveBytes` wolnego i najwyzej
     /// `kMaxTracks` plikow.
