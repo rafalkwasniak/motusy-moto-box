@@ -30,6 +30,7 @@
 #include "PortalIdentity.h"
 #include "Orientation.h"
 #include "RideClock.h"
+#include "TrackDecimator.h"
 #include "RideMetrics.h"
 #include "SpeedGate.h"
 #include "TelemetryJson.h"
@@ -44,6 +45,9 @@
 #include "hal/Store.h"
 #include "net/SetupPortal.h"
 #include "net/Uplink.h"
+// Slad trasy jest funkcja produktu i kompiluje sie zawsze; rejestrator
+// surowych danych IMU to narzedzie warsztatowe wlaczane flaga.
+#include "log/TrackLogger.h"
 #if MMB_RAW_LOGGER
 #include "log/RawLogger.h"
 #endif
@@ -64,6 +68,15 @@ motion::MountCalibration g_mount;
 motion::RideHistory g_history;
 /// Czas trwania biezacego przejazdu — od pierwszego do ostatniego ruchu.
 motion::RideClock g_rideClock;
+
+/// Slad trasy: decymator (korytarz eps=8 m) i zapis na flashu.
+track::TrackDecimator g_decimator;
+tracklog::TrackLogger g_trackLogger;
+/// Chwila ostatniego fixu podanego do sladu. Po dluzszej ciszy — tunel,
+/// wiadukt, garaz — nastepny punkt ma zaczac nowy segment, zeby mapa nie
+/// narysowala prostej przez pol miasta.
+uint32_t g_lastTrackFixMs = 0;
+bool g_trackGapOpen = false;
 /// §16 — pomiary zapisujemy dopiero powyzej progu predkosci. Bez tego przechyl
 /// przy manewrowaniu ustanawia rekord calej sesji.
 motion::SpeedGate g_speedGate;
@@ -268,7 +281,10 @@ void archiveCurrentRide() {
     // przejazdow i tak wynika z numeru `seq`, nie z daty.
     if (!g_history.push(g_metrics.currentRide(), g_rideClock.seconds(),
                         g_gps.unixTime(millis()))) {
-        return;  // pusty przejazd
+        // Pusty przejazd nie trafia do historii, wiec jego slad nie mialby
+        // numeru ani niczego, do czego moglby wrocic.
+        g_trackLogger.abortRide();
+        return;
     }
     g_rideArchived = true;
 
@@ -276,6 +292,14 @@ void archiveCurrentRide() {
     // te dwie rzeczy musza sie zgadzac co do sztuki, bo numer wpisu wynika
     // z jego pozycji w historii.
     g_queue.onRideArchived();
+
+    // Slad dostaje ten sam numer. Dopiero tutaj jest znany — plik powstawal
+    // w trakcie jazdy pod nazwa robocza.
+    if (g_trackLogger.isRecording()) {
+        track::Point tail;
+        if (g_decimator.flush(tail)) g_trackLogger.write(tail, millis());
+        g_trackLogger.finishRide(g_queue.lastSeq());
+    }
 
     g_store.saveHistory(g_history);
     g_store.saveUploadState(g_queue.lastSeq(), g_queue.sentThrough());
@@ -607,7 +631,7 @@ void resumeAfterAction();
 void printConfigHelp(Stream& io) {
     io.println("[konfig] SIEC=<nazwa>  HASLO=<haslo>  TOKEN=<token konta>  STAN  TEST  KASUJ");
     io.println("[gps]    GPS - stan modulu | GPS SUROWE - podglad zdan NMEA");
-    io.println("[slad]   SLAD - przelacza zapis sladu trasy GPX");
+    io.println("[slad]   SLAD - przelacza zapis | SLADY - lista | SLADY <nr> - zrzut | SLADY X - kasuj");
 }
 
 /// Stan modulu GPS jedna linia. Pierwsza rzecz, o ktora sie pyta przy
@@ -713,6 +737,8 @@ void handleSerialLine(Stream& io, const char* line) {
             return;
         }
 
+        if (g_trackLogger.handleCommand(io, line)) return;
+
 #if MMB_RAW_LOGGER
         if (g_logger.handleCommand(io, line)) return;
 #endif
@@ -778,6 +804,24 @@ void pumpSerial(Stream& io) {
     }
 }
 
+/// Naglowek pliku sladu. Szerokosc korytarza idzie do pliku, bo bez niej
+/// danych z roznych wersji firmware nie da sie uczciwie porownac.
+track::TrackHeader trackHeader() {
+    track::TrackHeader header;
+    header.deviceId = hal::deviceId();
+    header.firmware = cfg::kFirmwareVersion;
+    header.corridorM = static_cast<uint8_t>(track::TrackDecimatorConfig{}.corridorM);
+    return header;
+}
+
+/// Otwiera nowy slad: zeruje decymator i zaklada plik roboczy.
+void startTrack() {
+    g_decimator.reset();
+    g_trackLogger.startRide(trackHeader());
+    g_lastTrackFixMs = 0;
+    g_trackGapOpen = false;
+}
+
 /// §22.1 — przelaczenie modulu alarmowego.
 void toggleAlarm() {
     g_alarmEnabled = !g_alarmEnabled;
@@ -795,6 +839,15 @@ void toggleAlarm() {
 void toggleTrack() {
     g_trackEnabled = !g_trackEnabled;
     g_store.saveTrackEnabled(g_trackEnabled);
+
+    // Wylaczenie w trakcie jazdy NIE kasuje tego, co juz zebrane (kontrakt
+    // §8) — domyka tylko segment. Bez tego ponowne wlaczenie doklejaloby
+    // prosta przez caly odcinek, ktorego nie zapisywalismy.
+    if (!g_trackEnabled && g_trackLogger.isRecording()) {
+        track::Point tail;
+        if (g_decimator.flush(tail)) g_trackLogger.write(tail, millis());
+        g_decimator.breakSegment();
+    }
 
     drawMessage(g_trackEnabled ? "SLAD WLACZONY" : "SLAD WYLACZONY",
                 g_trackEnabled ? "zapis trasy GPX" : "trasa nie jest zapisywana",
@@ -943,6 +996,58 @@ void pumpImu() {
     }
 }
 
+/// Ile ciszy z modulu konczy segment sladu. Krotka utrata fixu (przejazd pod
+/// wiaduktem) ma zostac zwykla dziura w czasie, bo przez te kilka sekund
+/// motocykl faktycznie jechal prosto. Dluzsza — tunel, garaz, parking
+/// podziemny — znaczy, ze o przebiegu trasy nie wiemy nic i linia prosta
+/// przez pol miasta bylaby zmyslona.
+constexpr uint32_t kTrackGapMs = 20000;
+
+/// Domyka segment po dluzszej utracie fixu. Wolane takze wtedy, gdy z modulu
+/// nic nie przychodzi — to jest glowny przypadek, ktory tworzy przerwe.
+void updateTrackGap(uint32_t nowMs) {
+    if (!g_trackLogger.isRecording() || g_lastTrackFixMs == 0 || g_trackGapOpen) return;
+    if (nowMs - g_lastTrackFixMs < kTrackGapMs) return;
+
+    // Kolejnosc ma znaczenie: najpierw oddajemy ogon segmentu, dopiero potem
+    // zglaszamy przerwe. Odwrotnie zgubilby sie ostatni punkt przed tunelem,
+    // czyli dokladnie ten, w ktorym slad sie urywa.
+    track::Point point;
+    if (g_decimator.flush(point)) g_trackLogger.write(point, nowMs);
+    g_decimator.breakSegment();
+    g_trackGapOpen = true;
+}
+
+/// Podaje biezacy fix do sladu. Wolane wylacznie przy wlaczonej stacyjce
+/// i potwierdzonym fixie.
+void feedTrack(uint32_t nowMs) {
+    if (!g_trackEnabled) return;
+
+    // Wlaczenie opcji w trakcie jazdy zaczyna slad od tej chwili — plik
+    // powstaje przy pierwszym punkcie, wiec nic nie kosztuje, dopoki nikt
+    // niczego nie wlaczyl.
+    if (!g_trackLogger.isRecording()) startTrack();
+
+    track::Fix fix;
+    fix.lonE5 = g_gps.lonE5();
+    fix.latE5 = g_gps.latE5();
+    fix.timeS = g_gps.unixTime(nowMs);
+
+    // Przechyl ma sens tylko przy skalibrowanym montazu — bez kalibracji uklad
+    // odniesienia jest przypadkowy, wiec do sladu idzie zero zamiast smiecia.
+    if (g_mount.isCalibrated()) {
+        const float roll = g_orientation.state().rollDeg();
+        const int clamped = roll > 90.0f ? 90 : (roll < -90.0f ? -90 : static_cast<int>(roll));
+        fix.leanDeg = static_cast<int8_t>(clamped);
+    }
+
+    g_lastTrackFixMs = nowMs;
+    g_trackGapOpen = false;
+
+    track::Point point;
+    if (g_decimator.update(fix, point)) g_trackLogger.write(point, nowMs);
+}
+
 /// Odczyt modulu GPS. Wolany w kazdej iteracji petli — zdania przychodza raz
 /// na sekunde, ale bufor UART-u ma 256 bajtow, a jedna sekunda ruchu przy
 /// 9600 baud to ~600 bajtow. Rzadsze zagladanie gubiloby zdania.
@@ -980,6 +1085,10 @@ void pumpGps(uint32_t nowMs) {
         }
     }
 
+    // Przerwa w sladzie: sprawdzana ZANIM wyjdziemy na braku nowej probki,
+    // bo cisza z modulu jest wlasnie tym przypadkiem, ktory ja tworzy.
+    updateTrackGap(nowMs);
+
     if (!newSample) return;
 
     const motion::SpeedSample sample = g_gps.speed(nowMs);
@@ -999,6 +1108,7 @@ void pumpGps(uint32_t nowMs) {
     // odniesienia urzadzenia, wiec brak kalibracji nie ma powodu jej blokowac.
     if (g_deviceState.state() == state::DeviceState::Riding) {
         g_metrics.updateSpeed(sample);
+        feedTrack(nowMs);
     }
 }
 
@@ -1358,6 +1468,14 @@ void setup() {
     }
 #endif
 
+    // Slad trasy dzieli partycje i system plikow z rejestratorem surowych
+    // danych. Boot z zasilaniem znaczy trwajaca jazde — zdarzenie RideStarted
+    // juz nie padnie, wiec slad otwieramy tutaj.
+    if (g_trackLogger.begin() && g_trackEnabled &&
+        g_deviceState.state() == state::DeviceState::Riding) {
+        startTrack();
+    }
+
 #if MMB_RAW_LOGGER
     if (g_logger.begin()) {
         // Boot z zasilaniem = trwajaca sesja jazdy; zdarzenie RideStarted nie
@@ -1418,6 +1536,7 @@ void handleStateEvent(state::DeviceEvent event) {
             g_metrics.startNewRide();
             g_rideClock.reset();
             g_speedGate.reset();
+            if (g_trackEnabled) startTrack();
             g_rideArchived = false;
 #if MMB_RAW_LOGGER
             g_logger.startSession(millis());
