@@ -34,6 +34,7 @@ void GpsSource::setPower(bool on, uint32_t nowMs) {
         // Odliczanie proby rusza od tego momentu, zeby cisza przy rozruchu
         // nie zjadla jednego z czterech podejsc.
         probeStartedMs_ = nowMs;
+        poweredSinceMs_ = nowMs;
         if (!locked_) parser_.reset();
     }
 }
@@ -104,6 +105,14 @@ motion::SpeedSample GpsSource::speed(uint32_t nowMs) const {
 uint32_t GpsSource::unixTime(uint32_t nowMs) const {
     if (lastEpoch_ == 0) return 0;
     return lastEpoch_ + (nowMs - lastEpochMs_) / 1000;
+}
+
+bool GpsSource::isSilent(uint32_t nowMs) const {
+    // Bez zasilania modul nie ma jak sie odezwac — z punktu widzenia bramki
+    // predkosci to to samo, co jego brak.
+    if (!powered_) return true;
+    if (locked_) return false;
+    return nowMs - poweredSinceMs_ > config_.silenceMs;
 }
 
 bool GpsSource::hasFix(uint32_t nowMs) const {

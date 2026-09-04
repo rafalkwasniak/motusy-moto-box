@@ -521,27 +521,27 @@ void test_clock_survives_millis_overflow() {
 void test_gate_stays_closed_while_manoeuvring() {
     SpeedGate gate;
     gate.updateSpeed(2.0f, 1000);
-    TEST_ASSERT_FALSE(gate.isRecording(false, 1000));
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 1000));
 
     // Prowadzenie motocykla obok siebie to 4-5 km/h — wciaz ponizej progu.
     gate.updateSpeed(4.5f, 2000);
-    TEST_ASSERT_FALSE(gate.isRecording(false, 2000));
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 2000));
 
     gate.updateSpeed(5.0f, 3000);
-    TEST_ASSERT_TRUE(gate.isRecording(false, 3000));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, 3000));
 }
 
 /// Bez histerezy rejestracja migocze przy 4,9 / 5,1 km/h.
 void test_gate_has_hysteresis() {
     SpeedGate gate;
     gate.updateSpeed(6.0f, 1000);
-    TEST_ASSERT_TRUE(gate.isRecording(false, 1000));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, 1000));
 
     // Ponizej progu WEJSCIA, ale powyzej progu wyjscia — nadal jedziemy.
     gate.updateSpeed(4.0f, 2000);
-    TEST_ASSERT_TRUE(gate.isRecording(false, 2000));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, 2000));
     gate.updateSpeed(4.0f, 8000);
-    TEST_ASSERT_TRUE(gate.isRecording(false, 8000));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, 8000));
 }
 
 /// Awaryjne hamowanie konczy sie na zerze, a jego ostatnia faza bywa
@@ -553,9 +553,9 @@ void test_gate_keeps_recording_through_braking_to_standstill() {
     gate.updateSpeed(0.0f, 3000);
 
     // Wybieg trwa 2 s od pierwszej probki ponizej progu wyjscia.
-    TEST_ASSERT_TRUE(gate.isRecording(false, 3500));
-    TEST_ASSERT_TRUE(gate.isRecording(false, 4900));
-    TEST_ASSERT_FALSE(gate.isRecording(false, 5100));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, 3500));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, 4900));
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 5100));
 }
 
 /// Wybieg liczy sie od PIERWSZEJ probki ponizej progu. Inaczej stanie na
@@ -567,7 +567,7 @@ void test_gate_coast_does_not_renew_at_standstill() {
     gate.updateSpeed(0.0f, 3000);
     gate.updateSpeed(0.0f, 4000);
 
-    TEST_ASSERT_FALSE(gate.isRecording(false, 4000));
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 4000));
 }
 
 /// Ruszenie po postoju otwiera bramke z powrotem.
@@ -575,10 +575,10 @@ void test_gate_reopens_after_stop() {
     SpeedGate gate;
     gate.updateSpeed(50.0f, 1000);
     gate.updateSpeed(0.0f, 2000);
-    TEST_ASSERT_FALSE(gate.isRecording(false, 5000));
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 5000));
 
     gate.updateSpeed(30.0f, 6000);
-    TEST_ASSERT_TRUE(gate.isRecording(false, 6000));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, 6000));
 }
 
 /// Utrata fixu nie moze oznaczac "nie rejestruje nic" — awaria modulu ma
@@ -586,20 +586,48 @@ void test_gate_reopens_after_stop() {
 void test_gate_falls_back_to_imu_without_fix() {
     SpeedGate gate;
     gate.updateSpeed(0.0f, 1000);
-    TEST_ASSERT_FALSE(gate.isRecording(false, 1000));
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 1000));
 
     // Po czasie podtrzymania decyduje bezruch z IMU, a nie ostatnia predkosc.
-    TEST_ASSERT_TRUE(gate.isRecording(false, 1000 + 15001));
-    TEST_ASSERT_FALSE(gate.isRecording(true, 1000 + 15001));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, 1000 + 15001));
+    TEST_ASSERT_FALSE(gate.isRecording(true, true, 1000 + 15001));
 }
 
-/// Zanim przyjdzie pierwszy fix (zimny start to 30-60 s) urzadzenie musi
-/// mierzyc na dawnych zasadach.
-void test_gate_before_first_fix_uses_imu() {
+/// PRZED PIERWSZYM FIXEM BRAMKA JEST ZAMKNIETA. Zimny start GPS-a trwa
+/// 30-60 s, wiec bez tego warunku KAZDY przejazd zaczynal sie w trybie sprzed
+/// GPS-a, a przy biurku urzadzenie zostawalo w nim na zawsze — poruszenie reka
+/// ustanawialo rekord przechylu (blad zglszony 2026-09-04).
+///
+/// Ten test wczesniej twierdzil cos przeciwnego i przechodzil. Utrwalal blad.
+void test_gate_waits_for_first_fix_when_module_alive() {
     SpeedGate gate;
-    TEST_ASSERT_TRUE(gate.isRecording(false, 1000));
-    TEST_ASSERT_FALSE(gate.isRecording(true, 1000));
+
+    // Modul zyje, ale jeszcze nie zlapal pozycji. Ruch z IMU nie mowi nic
+    // o tym, czy motocykl jedzie — moze ktos wzial urzadzenie do reki.
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 1000));
+    TEST_ASSERT_FALSE(gate.isRecording(true, true, 1000));
     TEST_ASSERT_FALSE(gate.hasFreshSpeed(1000));
+}
+
+/// ...ale na modul, ktorego nie ma, nie ma po co czekac. Awaria ma cofnac
+/// urzadzenie do stanu sprzed GPS, a nie wylaczyc pomiary.
+void test_gate_falls_back_when_module_absent() {
+    SpeedGate gate;
+
+    TEST_ASSERT_TRUE(gate.isRecording(false, false, 1000));
+    TEST_ASSERT_FALSE(gate.isRecording(true, false, 1000));
+}
+
+/// Po pierwszym fixie utrata sygnalu dziala jak dawniej: skoro motocykl przed
+/// chwila jechal, tunel nie moze wylaczyc pomiarow.
+void test_gate_degrades_only_after_first_fix() {
+    SpeedGate gate;
+    gate.updateSpeed(50.0f, 1000);
+
+    // Fix zniknal na dluzej niz czas podtrzymania — mimo ze modul zyje,
+    // decyduje teraz bezruch z IMU.
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, 1000 + 15001));
+    TEST_ASSERT_FALSE(gate.isRecording(true, true, 1000 + 15001));
 }
 
 void test_gate_survives_millis_overflow() {
@@ -607,11 +635,11 @@ void test_gate_survives_millis_overflow() {
     const uint32_t beforeWrap = 0xFFFFF000;
 
     gate.updateSpeed(50.0f, beforeWrap);
-    TEST_ASSERT_TRUE(gate.isRecording(false, beforeWrap + 5000));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, beforeWrap + 5000));
 
     gate.updateSpeed(0.0f, beforeWrap + 6000);
-    TEST_ASSERT_TRUE(gate.isRecording(false, beforeWrap + 7000));
-    TEST_ASSERT_FALSE(gate.isRecording(false, beforeWrap + 9000));
+    TEST_ASSERT_TRUE(gate.isRecording(false, true, beforeWrap + 7000));
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, beforeWrap + 9000));
 }
 
 /// Historia niesie znacznik czasu obok wynikow — inaczej `recorded_at`
@@ -746,7 +774,9 @@ int main(int, char**) {
     RUN_TEST(test_gate_coast_does_not_renew_at_standstill);
     RUN_TEST(test_gate_reopens_after_stop);
     RUN_TEST(test_gate_falls_back_to_imu_without_fix);
-    RUN_TEST(test_gate_before_first_fix_uses_imu);
+    RUN_TEST(test_gate_waits_for_first_fix_when_module_alive);
+    RUN_TEST(test_gate_falls_back_when_module_absent);
+    RUN_TEST(test_gate_degrades_only_after_first_fix);
     RUN_TEST(test_gate_survives_millis_overflow);
     RUN_TEST(test_history_keeps_recorded_at);
 

@@ -38,6 +38,10 @@ struct GpsSourceConfig {
     /// Po jakim czasie bez swiezego fixa uznajemy, ze predkosci nie mamy.
     /// Tunel, wiadukt, garaz — §2.5 wymaga degradacji, nie zamarcia.
     uint32_t fixMaxAgeMs = 5000;
+    /// Po jakim czasie od podania napiecia milczacy modul uznajemy za
+    /// nieobecny. Cisza przy rozruchu i przy dobieraniu ustawien portu jest
+    /// normalna — cztery proby po 2 s to osiem sekund samego szukania.
+    uint32_t silenceMs = 20000;
     gps::NmeaQuality quality{};
 };
 
@@ -78,6 +82,12 @@ public:
 
     /// Czy z modulu w ogole cokolwiek przychodzi (dobrana predkosc transmisji).
     bool isReceiving() const { return locked_; }
+
+    /// Czy modul mozna juz uznac za NIEOBECNY. Rozstrzyga o tym, czy bramka
+    /// predkosci ma na niego czekac przed pierwszym fixem, czy od razu wrocic
+    /// do reguly sprzed GPS-a. Falsz przez pierwsze sekundy po podaniu
+    /// napiecia: cisza przy rozruchu nie znaczy awarii.
+    bool isSilent(uint32_t nowMs) const;
 
     /// Czas UTC jako uniksowy znacznik [s]; 0 gdy modul jeszcze go nie podal.
     /// Miedzy zdaniami (i po odcieciu zasilania modulu) doliczany jest uplyw
@@ -127,6 +137,8 @@ private:
     /// Numer sprawdzanej kombinacji: predkosc transmisji razy kolejnosc pinow.
     uint8_t probeIndex_ = 0;
     uint32_t probeStartedMs_ = 0;
+    /// Chwila podania napiecia — od niej liczymy cierpliwosc wobec ciszy.
+    uint32_t poweredSinceMs_ = 0;
     /// Ile bajtow przyszlo w biezacej probie — niezaleznie od tego, czy dalo
     /// sie z nich cokolwiek zlozyc.
     uint32_t probeBytes_ = 0;

@@ -902,6 +902,30 @@ podtrzymania wracamy do dzisiejszej reguły opartej na `stationary` z IMU.
 Awaria modułu GPS ma degradować urządzenie do stanu sprzed GPS, a nie
 wyłączać pomiary.
 
+**Ale degradacja dotyczy WYŁĄCZNIE utraty fixu, nie jego braku od początku.**
+Pierwsza wersja stosowała ją od startu przejazdu i był to błąd (znaleziony
+przez użytkownika 2026-09-04). Zimny start GPS-a trwa 30–60 s i wymaga nieba
+nad głową, więc **każdy** przejazd zaczynał się w trybie sprzed GPS-a, a przy
+biurku urządzenie zostawało w nim na zawsze — każde poruszenie ręką ustanawiało
+rekord przechyłu, mimo że prędkość pokazywała `---`.
+
+Reguła nie odróżniała dwóch różnych sytuacji:
+
+| Stan | Co wiemy o jeździe | Reakcja |
+|---|---|---|
+| fixu jeszcze nie było, moduł żyje | **nic** — ruch może być ręką | bramka zamknięta, czekamy |
+| fixu jeszcze nie było, moduł milczy | nic i nigdy się nie dowiemy | reguła sprzed GPS |
+| fix był i zniknął | motocykl przed chwilą jechał | reguła sprzed GPS |
+
+Rozróżnienie „moduł żyje" musi przyjść z zewnątrz (`hal::GpsSource::isSilent`),
+bo `SpeedGate` nie wie nic o sprzęcie. Cisza przez pierwsze ~20 s po podaniu
+napięcia **nie** liczy się jako awaria: samo dobieranie ustawień portu to
+cztery próby po 2 s.
+
+Ekran diagnostyczny `GPS` nazywa ten trzeci stan wprost —
+`bramka: wstrzymana (zrodlo: czekam na pierwszy fix)` — bo bez tego
+„wstrzymana" przy pustej prędkości wygląda identycznie jak awaria.
+
 **Prowadzenie motocykla pieszo to 4–5 km/h**, czyli okolice progu. Ratuje nas
 to, że prowadząc trzyma się kierownicę i motocykl stoi pionowo — ale gdyby
 okazało się to problemem, próg idzie w górę, nie histereza w dół.

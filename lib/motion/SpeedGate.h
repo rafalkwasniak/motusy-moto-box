@@ -14,10 +14,23 @@
 //   2. WYBIEG. Awaryjne hamowanie konczy sie na zerze, a jego ostatnia faza
 //      bywa najostrzejsza — bez wybiegu bramka odcielaby dokladnie to, co
 //      najciekawsze.
-//   3. DEGRADACJA. Utrata fixu nie moze oznaczac "nie rejestruje nic". Po
-//      uplywie czasu podtrzymania wracamy do reguly sprzed GPS-a, opartej na
-//      `stationary` z IMU. Awaria modulu ma cofnac urzadzenie do stanu
-//      sprzed GPS, a nie wylaczyc pomiary.
+//   3. DEGRADACJA, ALE DOPIERO PO PIERWSZYM FIXIE. Utrata fixu nie moze
+//      oznaczac "nie rejestruje nic": po uplywie czasu podtrzymania wracamy
+//      do reguly sprzed GPS-a, opartej na `stationary` z IMU.
+//
+//      PIERWSZA WERSJA ROBILA TO OD STARTU PRZEJAZDU I BYL TO BLAD (2026-09-04,
+//      znaleziony przez uzytkownika). Zimny start GPS-a trwa 30-60 s i wymaga
+//      nieba nad glowa, wiec KAZDY przejazd zaczynal sie w trybie sprzed GPS-a,
+//      a przy biurku urzadzenie zostawalo w nim na zawsze — kazde poruszenie
+//      reka ustanawialo rekord. Regula nie odrozniala dwoch roznych sytuacji:
+//      "jeszcze nie mialem fixu" nie mowi nic o tym, czy motocykl jedzie,
+//      podczas gdy "mialem fix i zgubilem go w tunelu" mowi, ze przed chwila
+//      jechal.
+//
+//      Teraz przed pierwszym fixem bramka jest ZAMKNIETA — chyba ze modulu
+//      w ogole nie ma. To rozroznienie musi przyjsc z zewnatrz (`gpsResponding`),
+//      bo ta klasa nie wie nic o sprzecie. Awaria modulu nadal cofa urzadzenie
+//      do stanu sprzed GPS, a nie wylacza pomiarow.
 //
 // Czyste C++ bez zaleznosci od sprzetu.
 
@@ -52,7 +65,11 @@ public:
     /// Czy w tej chwili wolno zapisywac pomiary.
     /// @param imuStationary bezruch wykryty przez IMU — zrodlo zapasowe,
     ///        uzywane dopiero gdy predkosci brakuje dluzej niz `fixHoldMs`.
-    bool isRecording(bool imuStationary, uint32_t nowMs) const;
+    /// @param gpsResponding czy modul GPS w ogole sie odzywa. Rozstrzyga
+    ///        WYLACZNIE przed pierwszym fixem przejazdu: modul, ktory zyje,
+    ///        dostaje czas na zlapanie pozycji i do tego czasu nic nie
+    ///        zapisujemy; na modul, ktorego nie ma, nie ma po co czekac.
+    bool isRecording(bool imuStationary, bool gpsResponding, uint32_t nowMs) const;
 
     /// Czy decyzja opiera sie na predkosci z GPS, czy juz na samym IMU.
     /// Do diagnostyki — po tym widac, czy bramka w ogole dziala.

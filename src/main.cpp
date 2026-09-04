@@ -748,11 +748,18 @@ void printGpsStatus(Stream& io) {
     }
 
     // Bramka predkosci (§16): po tym widac, czy pomiary sa w tej chwili
-    // zapisywane i co o tym zadecydowalo.
+    // zapisywane i CO O TYM ZADECYDOWALO. Trzeci przypadek — czekanie na
+    // pierwszy fix — trzeba nazwac wprost, bo bez niego "wstrzymana" przy
+    // pustej predkosci wyglada tak samo jak awaria.
+    const bool silent = g_gps.isSilent(nowMs);
+    const char* source = g_speedGate.hasFreshSpeed(nowMs) ? "predkosc GPS"
+                         : silent                         ? "bezruch z IMU (modul milczy)"
+                                                          : "czekam na pierwszy fix";
     io.printf("[gps] bramka: %s (zrodlo: %s)\n",
-              g_speedGate.isRecording(g_orientation.state().stationary, nowMs) ? "rejestruje"
-                                                                              : "wstrzymana",
-              g_speedGate.hasFreshSpeed(nowMs) ? "predkosc GPS" : "bezruch z IMU");
+              g_speedGate.isRecording(g_orientation.state().stationary, !silent, nowMs)
+                  ? "rejestruje"
+                  : "wstrzymana",
+              source);
 }
 
 /// Stan konfiguracji BEZ sekretow: haslo tylko jako fakt, token zamaskowany.
@@ -1102,8 +1109,11 @@ void pumpImu() {
         // §16 — bramka predkosci. Przy zywym GPS-ie decyduje predkosc (z
         // histereza i wybiegiem na hamowanie), a bez fixa zostaje dawna regula
         // oparta na bezruchu z IMU.
-        const bool recording =
-            g_speedGate.isRecording(g_orientation.state().stationary, millis());
+        // Drugi argument rozstrzyga wylacznie przed pierwszym fixem przejazdu:
+        // zyjacy modul dostaje czas na zlapanie pozycji i do tego czasu nic nie
+        // zapisujemy, a na modul, ktorego nie ma, nie ma po co czekac.
+        const bool recording = g_speedGate.isRecording(g_orientation.state().stationary,
+                                                       !g_gps.isSilent(millis()), millis());
 
         if (recording) {
             g_metrics.update(g_orientation.state());

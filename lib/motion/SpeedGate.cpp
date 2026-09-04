@@ -28,9 +28,17 @@ void SpeedGate::updateSpeed(float kmh, uint32_t nowMs) {
     below_ = false;
 }
 
-bool SpeedGate::isRecording(bool imuStationary, uint32_t nowMs) const {
-    // Bez swiezej predkosci wracamy do reguly sprzed GPS-a.
-    if (!hasFreshSpeed(nowMs)) return !imuStationary;
+bool SpeedGate::isRecording(bool imuStationary, bool gpsResponding, uint32_t nowMs) const {
+    if (!hasFreshSpeed(nowMs)) {
+        // Fixu JESZCZE NIE BYLO w tym przejezdzie. Bezruch z IMU nie mowi
+        // wtedy nic o tym, czy motocykl jedzie — moze po prostu ktos wziete
+        // urzadzenie do reki. Dopoki modul zyje, czekamy na niego.
+        if (!haveSpeed_ && gpsResponding) return false;
+
+        // Fix byl i zniknal (tunel, wiadukt) albo modulu nie ma wcale.
+        // W obu przypadkach zostaje regula sprzed GPS-a.
+        return !imuStationary;
+    }
 
     if (!open_) return false;
     // Stan liczony takze przy odpytaniu, bo probki przychodza 1 Hz, a petla
