@@ -32,6 +32,12 @@ input,select{width:100%;box-sizing:border-box;padding:12px;border-radius:8px;
 button{width:100%;margin-top:24px;padding:14px;border:0;border-radius:8px;
  background:#8ab4f8;color:#111418;font-size:16px;font-weight:600}
 .hint{font-size:13px;color:#9aa0a6;margin-top:6px}
+/* Zgoda na zapis sladu czyta sie jak zdanie, a nie jak pole formularza —
+   stad etykieta w jednej linii z polem i jasniejszy kolor niz reszta etykiet.
+   Bez wlasnej szerokosci checkbox dziedziczylby width:100% z reguly wyzej. */
+label.check{display:flex;align-items:center;gap:10px;color:#e8eaed;font-size:15px;
+ margin:24px 0 0}
+label.check input{width:20px;height:20px;flex:none;margin:0}
 .ok{color:#81c995}.err{color:#f28b82}
 </style>
 )CSS";
@@ -56,11 +62,14 @@ String escapeHtml(const char* text) {
 
 }  // namespace
 
-bool SetupPortal::begin(const char* deviceId, const telemetry::IntegrationConfig& current) {
+bool SetupPortal::begin(const char* deviceId, const telemetry::IntegrationConfig& current,
+                        bool trackEnabled) {
     if (running_) return true;
 
     current_ = current;
     submitted_ = current;
+    currentTrack_ = trackEnabled;
+    submittedTrack_ = trackEnabled;
     pending_ = PortalEvent::None;
 
     telemetry::portalSsid(deviceId, apSsid_, sizeof(apSsid_));
@@ -188,6 +197,15 @@ void SetupPortal::handleForm() {
               "<input id=token name=token placeholder=\"\">"
               "<p class=hint>Puste pole = bez zmian. Token skopiuj ze strony.</p>");
 
+    // Slad trasy: zgoda, a nie ustawienie techniczne — stad pelne zdanie
+    // zamiast samej etykiety. Domyslnie wylaczony, wiec checkbox jest jedynym
+    // miejscem, w ktorym uzytkownik moze go swiadomie zaznaczyc z telefonu.
+    page += F("<label class=check><input type=checkbox name=slad value=1");
+    if (currentTrack_) page += F(" checked");
+    page += F("> Zapisuj ślad trasy (GPX)</label>"
+              "<p class=hint>Trasa przejazdu trafia na Twoje konto i jest widoczna "
+              "tylko dla Ciebie. Wyłączone = nic się nie zapisuje.</p>");
+
     page += F("<button type=submit>Zapisz i sprawdź</button>"
               "</form></main></body></html>");
 
@@ -238,6 +256,9 @@ void SetupPortal::handleSave() {
     }
 
     submitted_ = next;
+    // Niezaznaczony checkbox NIE jest wysylany przez przegladarke, wiec o jego
+    // stanie mowi obecnosc pola, a nie jego wartosc.
+    submittedTrack_ = server_.hasArg("slad");
     pending_ = PortalEvent::Submitted;
 
     // Sprawdzenie tokena wymaga polaczenia z siecia domowa, a wtedy punkt

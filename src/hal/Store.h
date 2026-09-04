@@ -35,6 +35,11 @@ struct PersistentState {
     /// motocykla, wiec brak zapisanego ustawienia nie powinien zostawiac go bez ochrony.
     bool alarmEnabled = true;
 
+    /// Zapis sladu trasy. Domyslnie WYLACZONY — odwrotnie niz alarm i celowo:
+    /// trasa to dane innej wagi niz kat przechylu i wymaga swiadomej zgody
+    /// (docs/gpx-slad-trasy.md §1). Brak zapisanego ustawienia znaczy "nie".
+    bool trackEnabled = false;
+
     bool mountCalibrated = false;
     motion::Mat3 mountRotation;
 
@@ -95,6 +100,9 @@ public:
 
     /// §22.1 — stan alarmu zmienia sie rzadko, wiec zapisujemy go natychmiast.
     bool saveAlarmEnabled(bool enabled);
+
+    /// Zapis sladu trasy — tak samo rzadka zmiana jak alarm.
+    bool saveTrackEnabled(bool enabled);
 
     /// §14 — kalibracja zmienia sie tylko na wyrazne zyczenie uzytkownika.
     bool saveMount(const motion::MountCalibration& mount);

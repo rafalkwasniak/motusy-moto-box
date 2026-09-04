@@ -55,18 +55,27 @@ constexpr uint32_t kHoldPromptDelayMs = 500;
 // okazalo sie meczace — po testach na sprzecie (2026-08-28) pasma sa rowne,
 // po 2 sekundy kazde:
 //     do 2 s   -> przelaczenie alarmu
-//     2 - 4 s  -> reset wynikow
-//     4 - 6 s  -> kalibracja
-//     od 6 s   -> integracja ze strona
+//     2 - 4 s  -> slad trasy GPX
+//     4 - 6 s  -> reset wynikow
+//     6 - 8 s  -> kalibracja
+//     od 8 s   -> integracja ze strona
+//
+// KOLEJNOSC WEDLUG CZESTOSCI UZYCIA (decyzja uzytkownika, 2026-09-04): alarm
+// i slad to przelaczniki uzywane regularnie, wiec leza najplycej. Reset jest
+// sporadyczny, bo zeruje takze rekord predkosci. Kalibracja i integracja to
+// akcje jednorazowe — osiem sekund jest tam kosztem przyjetym swiadomie,
+// inaczej niz przy akcji, do ktorej wraca sie co jazde.
+/// Prog przelaczenia zapisu sladu trasy.
+constexpr uint32_t kButtonTrackHoldMs = 2000;
 /// §22.2 — prog resetu wynikow.
-constexpr uint32_t kButtonResetHoldMs = 2000;
+constexpr uint32_t kButtonResetHoldMs = 4000;
 /// §22.3 — prog uruchomienia kalibracji.
-constexpr uint32_t kButtonCalibrationHoldMs = 4000;
+constexpr uint32_t kButtonCalibrationHoldMs = 6000;
 /// Prog konfiguracji integracji. Ostatnia pozycja celowo: wchodzi sie tu raz,
 /// przy uruchamianiu urzadzenia, a potem sie o niej zapomina. Droga przez
-/// reset i kalibracje jest bezpieczna — §23 wykonuje wylacznie akcje progu
-/// osiagnietego w chwili puszczenia.
-constexpr uint32_t kButtonIntegrationHoldMs = 6000;
+/// slad, reset i kalibracje jest bezpieczna — §23 wykonuje wylacznie akcje
+/// progu osiagnietego w chwili puszczenia.
+constexpr uint32_t kButtonIntegrationHoldMs = 8000;
 
 /// Jak dlugo ekran INTEGRACJA czeka, zanim sam wroci do wynikow. Pieć minut,
 /// bo w tym czasie uzytkownik szuka telefonu, laczy sie z siecia urzadzenia

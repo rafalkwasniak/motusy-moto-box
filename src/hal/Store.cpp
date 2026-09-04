@@ -11,6 +11,10 @@ constexpr const char* kKeyVersion = "ver";
 constexpr const char* kKeyOverall = "max";
 constexpr const char* kKeyRide = "ride";
 constexpr const char* kKeyAlarm = "alarm";
+/// Dolozony 2026-09-04. Osobny klucz z wartoscia domyslna, wiec NIE wymaga
+/// podniesienia kSchemaVersion — a to jest istotne, bo zmiana wersji czysci
+/// takze kalibracje montazu.
+constexpr const char* kKeyTrack = "trk";
 constexpr const char* kKeyMount = "mount";
 constexpr const char* kKeyArchived = "arch";
 constexpr const char* kKeyHistory = "hist";
@@ -146,6 +150,8 @@ LoadResult Store::load(PersistentState& out) {
     }
 
     out.alarmEnabled = prefs_.getUChar(kKeyAlarm, 1) != 0;
+    // Domyslnie 0: pamiec sprzed tej wersji firmware znaczy "slad wylaczony".
+    out.trackEnabled = prefs_.getUChar(kKeyTrack, 0) != 0;
     out.rideArchived = prefs_.getUChar(kKeyArchived, 0) != 0;
 
     // Klucze dolozone po v2. Brak wpisu (pamiec sprzed tej wersji firmware)
@@ -270,6 +276,13 @@ bool Store::saveIntegration(const telemetry::IntegrationConfig& integration) {
 bool Store::saveAlarmEnabled(bool enabled) {
     if (!available_) return false;
     prefs_.putUChar(kKeyAlarm, enabled ? 1 : 0);
+    prefs_.putUInt(kKeyVersion, kSchemaVersion);
+    return true;
+}
+
+bool Store::saveTrackEnabled(bool enabled) {
+    if (!available_) return false;
+    prefs_.putUChar(kKeyTrack, enabled ? 1 : 0);
     prefs_.putUInt(kKeyVersion, kSchemaVersion);
     return true;
 }

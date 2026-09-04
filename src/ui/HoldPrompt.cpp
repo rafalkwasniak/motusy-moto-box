@@ -13,7 +13,7 @@ namespace {
 /// wieksza niz "PRZELACZ ALARM".
 const lgfx::IFont* titleFont(m5gfx::LovyanGFX* gfx) {
     gfx->setFont(&fonts::FreeSansBold12pt7b);
-    if (gfx->textWidth(input::actionLabel(input::ButtonAction::ShortPress)) <=
+    if (gfx->textWidth(input::actionLabel(input::ButtonAction::Alarm)) <=
         layout::kContentWidth) {
         return &fonts::FreeSansBold12pt7b;
     }
@@ -24,11 +24,13 @@ const lgfx::IFont* titleFont(m5gfx::LovyanGFX* gfx) {
 
 uint16_t HoldPrompt::accentFor(input::ButtonAction action) {
     switch (action) {
-        case input::ButtonAction::ShortPress: return color::kAccel;
+        case input::ButtonAction::Alarm: return color::kAccel;
+        // Slad bierze kolor predkosci — obie rzeczy pochodza z GPS-a.
+        case input::ButtonAction::Track: return color::kSpeed;
         // Reset kasuje rekordy bezpowrotnie — kolor ostrzegawczy.
-        case input::ButtonAction::MediumHold: return color::kWaiting;
-        case input::ButtonAction::LongHold: return color::kCalibration;
-        case input::ButtonAction::ExtraHold: return color::kPrimary;
+        case input::ButtonAction::Reset: return color::kWaiting;
+        case input::ButtonAction::Calibration: return color::kCalibration;
+        case input::ButtonAction::Integration: return color::kPrimary;
         default: return color::kMuted;
     }
 }
@@ -55,23 +57,15 @@ void HoldPrompt::draw(ScreenBuffer& buffer, const input::ButtonFsm& fsm) {
     gfx->drawString(pending == input::ButtonAction::None ? "..." : input::actionLabel(pending),
                     centerX, kActionY);
 
-    // Pasek pokazuje postep w obrebie biezacego progu, nie calego przytrzymania —
-    // inaczej po 2 sekundach zatrzymywalby sie i nic by nie mowil.
-    const auto& config = fsm.config();
+    // Pasek pokazuje postep w obrebie biezacego szczebla, nie calego
+    // przytrzymania — inaczej po 2 sekundach zatrzymywalby sie i nic by nie mowil.
+    //
+    // Granice bierzemy z maszyny stanow zamiast odtwarzac tu drabinke z pol
+    // konfiguracji. Przy pieciu szczeblach ta druga kopia i tak by sie rozjechala,
+    // a przy dokladaniu szostego trzeba by o niej pamietac.
     const uint32_t held = fsm.heldMs();
-    uint32_t lower = 0;
-    uint32_t upper = config.mediumHoldMs;
-    if (pending == input::ButtonAction::MediumHold) {
-        lower = config.mediumHoldMs;
-        upper = config.longHoldMs;
-    } else if (pending == input::ButtonAction::LongHold) {
-        lower = config.longHoldMs;
-        upper = config.extraHoldMs;
-    } else if (pending == input::ButtonAction::ExtraHold) {
-        // Ostatni prog — pasek stoi pelny, nie ma juz dokad isc.
-        lower = config.extraHoldMs;
-        upper = config.extraHoldMs;
-    }
+    const uint32_t lower = fsm.rungStartMs();
+    const uint32_t upper = fsm.nextRungStartMs();
 
     float fraction = 1.0f;
     if (upper > lower) {

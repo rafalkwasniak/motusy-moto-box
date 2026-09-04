@@ -40,7 +40,9 @@ public:
     /// Skanuje sieci, stawia punkt dostepowy i serwer HTTP.
     /// @param deviceId identyfikator urzadzenia (nazwa i haslo sieci)
     /// @param current  biezaca konfiguracja — wypelnia formularz
-    bool begin(const char* deviceId, const telemetry::IntegrationConfig& current);
+    /// @param trackEnabled biezacy stan zapisu sladu — ustawia checkbox
+    bool begin(const char* deviceId, const telemetry::IntegrationConfig& current,
+               bool trackEnabled);
 
     /// Gasi serwer, DNS i punkt dostepowy.
     void end();
@@ -60,6 +62,11 @@ public:
     /// Konfiguracja zlozona przez formularz. Wazna po zdarzeniu Submitted.
     const telemetry::IntegrationConfig& submitted() const { return submitted_; }
 
+    /// Stan checkboxa sladu z formularza. Wazny po zdarzeniu Submitted.
+    /// Trzymany osobno od IntegrationConfig, bo tamta struktura opisuje siec
+    /// i token, a slad jest ustawieniem urzadzenia, nie integracji.
+    bool submittedTrackEnabled() const { return submittedTrack_; }
+
 private:
     void handleForm();
     void handleSave();
@@ -76,6 +83,9 @@ private:
     /// Konfiguracja pokazywana w formularzu i ta zlozona przez uzytkownika.
     telemetry::IntegrationConfig current_;
     telemetry::IntegrationConfig submitted_;
+
+    bool currentTrack_ = false;
+    bool submittedTrack_ = false;
 
     /// Nazwy sieci znalezione przed podniesieniem AP.
     static constexpr size_t kMaxScanned = 12;

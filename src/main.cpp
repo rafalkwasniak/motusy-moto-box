@@ -147,12 +147,16 @@ size_t historyPageCount() {
     return (count + 1) / 2;
 }
 
-/// Progi przycisku pochodza wprost z §22 specyfikacji.
+/// Drabinka przycisku (§22). Kolejnosc szczebli wynika z czestosci uzycia —
+/// uzasadnienie przy progach w config.h.
 input::ButtonFsmConfig makeButtonConfig() {
     input::ButtonFsmConfig config;
-    config.mediumHoldMs = cfg::kButtonResetHoldMs;
-    config.longHoldMs = cfg::kButtonCalibrationHoldMs;
-    config.extraHoldMs = cfg::kButtonIntegrationHoldMs;
+    config.rungCount = 5;
+    config.rungs[0] = {0, input::ButtonAction::Alarm};
+    config.rungs[1] = {cfg::kButtonTrackHoldMs, input::ButtonAction::Track};
+    config.rungs[2] = {cfg::kButtonResetHoldMs, input::ButtonAction::Reset};
+    config.rungs[3] = {cfg::kButtonCalibrationHoldMs, input::ButtonAction::Calibration};
+    config.rungs[4] = {cfg::kButtonIntegrationHoldMs, input::ButtonAction::Integration};
     return config;
 }
 
@@ -215,6 +219,10 @@ uint32_t g_frozenStandbySeconds = 0;
 
 bool g_imuAvailable = false;
 bool g_alarmEnabled = true;
+/// Zapis sladu trasy. WYLACZONY domyslnie i to jest cala roznica wobec alarmu:
+/// alarm ma chronic motocykl, wiec brak ustawienia nie moze go zostawic bez
+/// ochrony; slad zapisuje trase, wiec brak ustawienia nie moze go wlaczyc.
+bool g_trackEnabled = false;
 const char* g_storageStatus = "PAMIEC - BLAD";
 char g_i2cStatus[32] = "I2C - BRAK SKANU";
 
@@ -488,7 +496,7 @@ void verifyIntegration() {
 /// Wejscie tutaj stawia siec urzadzenia, wyjscie ja gasi. Ekran pokazuje
 /// nazwe sieci, haslo i adres — trzy rzeczy do przepisania do telefonu.
 void runIntegrationScreen() {
-    if (!g_portal.begin(hal::deviceId(), g_integration)) {
+    if (!g_portal.begin(hal::deviceId(), g_integration, g_trackEnabled)) {
         drawMessage("BLAD", "NIE UDALO SIE WLACZYC WIFI", ui::color::kAlarm);
         delay(2500);
         return;
@@ -548,10 +556,19 @@ void runIntegrationScreen() {
     }
 
     const telemetry::IntegrationConfig next = g_portal.submitted();
+    const bool nextTrack = g_portal.submittedTrackEnabled();
     g_portal.end();
     M5.Display.setBrightness(cfg::kDisplayBrightness);
 
     if (!submitted) return;
+
+    // Slad zapisujemy osobno i PRZED integracja: to ustawienie urzadzenia,
+    // a nie czesc konfiguracji sieci, wiec nieudany zapis tokena nie ma prawa
+    // cofnac swiadomie zaznaczonej zgody na zapis trasy.
+    if (nextTrack != g_trackEnabled) {
+        g_trackEnabled = nextTrack;
+        g_store.saveTrackEnabled(g_trackEnabled);
+    }
 
     g_integration = next;
     const bool saved = g_store.saveIntegration(g_integration);
@@ -590,6 +607,7 @@ void resumeAfterAction();
 void printConfigHelp(Stream& io) {
     io.println("[konfig] SIEC=<nazwa>  HASLO=<haslo>  TOKEN=<token konta>  STAN  TEST  KASUJ");
     io.println("[gps]    GPS - stan modulu | GPS SUROWE - podglad zdan NMEA");
+    io.println("[slad]   SLAD - przelacza zapis sladu trasy GPX");
 }
 
 /// Stan modulu GPS jedna linia. Pierwsza rzecz, o ktora sie pyta przy
@@ -669,6 +687,19 @@ void handleSerialLine(Stream& io, const char* line) {
 
         if (commandEquals(line, "GPS")) {
             printGpsStatus(io);
+            return;
+        }
+
+        // Droga serwisowa do przelacznika sladu — ta sama, co przycisk (2-4 s)
+        // i checkbox w portalu. Przy biurku jest najkrotsza.
+        if (commandEquals(line, "SLAD")) {
+            g_trackEnabled = !g_trackEnabled;
+            if (!g_store.saveTrackEnabled(g_trackEnabled)) {
+                io.println("[slad] BLAD ZAPISU - ustawienie nie przezyje restartu");
+                return;
+            }
+            io.printf("[slad] zapis trasy: %s\n",
+                      g_trackEnabled ? "WLACZONY" : "wylaczony (ta sama komenda wlacza)");
             return;
         }
 
@@ -757,6 +788,20 @@ void toggleAlarm() {
     delay(1200);
 }
 
+/// Przelaczenie zapisu sladu trasy. Domyslnie WYLACZONY — trasa to dane innej
+/// wagi niz kat przechylu, wiec ma byc swiadoma zgoda (docs/gpx-slad-trasy.md §1).
+/// Wylaczona opcja znaczy, ze nic sie nie zapisuje: zero zuzycia flasha,
+/// nie tylko brak wysylki.
+void toggleTrack() {
+    g_trackEnabled = !g_trackEnabled;
+    g_store.saveTrackEnabled(g_trackEnabled);
+
+    drawMessage(g_trackEnabled ? "SLAD WLACZONY" : "SLAD WYLACZONY",
+                g_trackEnabled ? "zapis trasy GPX" : "trasa nie jest zapisywana",
+                g_trackEnabled ? ui::color::kSpeed : ui::color::kMuted);
+    delay(1200);
+}
+
 /// Odtworzenie stanu z pamieci nieulotnej.
 ///
 /// Rozroznienie wazne dla §6.1 i §17: przy starcie z zasilaniem zewnetrznym
@@ -775,6 +820,7 @@ void restoreState(bool externalPowerAtBoot) {
     }
 
     g_alarmEnabled = state.alarmEnabled;
+    g_trackEnabled = state.trackEnabled;
     g_history = state.history;
     g_rideArchived = state.rideArchived;
     g_queue.restore(state.lastRideSeq, state.sentThrough);
@@ -1233,7 +1279,7 @@ void handleButtons() {
 
     // ── KEY2: akcje z progami czasowymi (§22, §23) ────────────────────────
     switch (g_button.update(actionButton().isPressed(), millis())) {
-        case input::ButtonAction::ShortPress:
+        case input::ButtonAction::Alarm:
             if (g_swallowAction) {
                 g_swallowAction = false;
                 break;
@@ -1241,15 +1287,19 @@ void handleButtons() {
             toggleAlarm();
             resumeAfterAction();
             break;
-        case input::ButtonAction::MediumHold:
+        case input::ButtonAction::Track:
+            toggleTrack();
+            resumeAfterAction();
+            break;
+        case input::ButtonAction::Reset:
             runResultsReset();
             resumeAfterAction();
             break;
-        case input::ButtonAction::LongHold:
+        case input::ButtonAction::Calibration:
             runMountCalibration();
             resumeAfterAction();
             break;
-        case input::ButtonAction::ExtraHold:
+        case input::ButtonAction::Integration:
             runIntegrationScreen();
             resumeAfterAction();
             break;
@@ -1320,10 +1370,10 @@ void setup() {
 
     Serial.printf("\n=== %s %s ===\n", cfg::kDeviceName, cfg::kFirmwareVersion);
     g_i2c.printTo(Serial);
-    Serial.printf("IMU: %s | %s | bufor: %s | alarm: %s\n",
+    Serial.printf("IMU: %s | %s | bufor: %s | alarm: %s | slad: %s\n",
                   g_imuAvailable ? "OK" : "BRAK", g_storageStatus,
                   g_buffer.isBuffered() ? "PSRAM" : "bezposredni",
-                  g_alarmEnabled ? "WL" : "WYL");
+                  g_alarmEnabled ? "WL" : "WYL", g_trackEnabled ? "WL" : "WYL");
     Serial.printf("Bateria: %d%% (%d mV), zasilanie: %s (impuls ladowania: %s)\n",
                   M5.Power.getBatteryLevel(), g_power.batteryMillivolts(),
                   g_power.isExternal() ? "ZEWNETRZNE" : "bateria",
