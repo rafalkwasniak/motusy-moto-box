@@ -77,6 +77,11 @@ tracklog::TrackLogger g_trackLogger;
 /// narysowala prostej przez pol miasta.
 uint32_t g_lastTrackFixMs = 0;
 bool g_trackGapOpen = false;
+/// Czy slad niesie prawdziwy czas UTC, czy tylko sekundy od swojego poczatku.
+/// Rozstrzygane RAZ, przy pierwszym fixie sladu — patrz feedTrack().
+bool g_trackTimed = false;
+bool g_trackTimeDecided = false;
+uint32_t g_trackBaseMs = 0;
 /// §16 — pomiary zapisujemy dopiero powyzej progu predkosci. Bez tego przechyl
 /// przy manewrowaniu ustanawia rekord calej sesji.
 motion::SpeedGate g_speedGate;
@@ -820,6 +825,7 @@ void startTrack() {
     g_trackLogger.startRide(trackHeader());
     g_lastTrackFixMs = 0;
     g_trackGapOpen = false;
+    g_trackTimeDecided = false;
 }
 
 /// §22.1 — przelaczenie modulu alarmowego.
@@ -1028,10 +1034,29 @@ void feedTrack(uint32_t nowMs) {
     // niczego nie wlaczyl.
     if (!g_trackLogger.isRecording()) startTrack();
 
+    // TRYB CZASU USTALAMY RAZ, przy pierwszym punkcie sladu.
+    //
+    // Serwer traktuje `t0=0` jako "caly slad bez czasu" i nie sumuje wtedy dt
+    // do dat (docs/api-jak-wysylac.md §5). Modul podaje czas UTC zwykle zanim
+    // zlapie pozycje, ale nie zawsze — a slad, ktory zaczyna sie bez czasu
+    // i dostaje go w polowie, bylby mieszanka: t0=0 unieważnia wtedy takze te
+    // punkty, ktore czas mialy. Albo wszystkie punkty maja czas, albo zaden.
+    //
+    // Bez czasu z GPS-a liczymy sekundy od poczatku sladu. Pierwszy punkt ma
+    // wtedy dokladnie zero, czyli `t0=0` — a kolejne niosa PRAWDZIWE odstepy,
+    // dzieki czemu twardy ogranicznik 60 s w decymatorze dziala tak samo jak
+    // przy znanym czasie. Same odstepy serwer i tak zignoruje.
+    const uint32_t epoch = g_gps.unixTime(nowMs);
+    if (!g_trackTimeDecided) {
+        g_trackTimed = epoch != 0;
+        g_trackBaseMs = nowMs;
+        g_trackTimeDecided = true;
+    }
+
     track::Fix fix;
     fix.lonE5 = g_gps.lonE5();
     fix.latE5 = g_gps.latE5();
-    fix.timeS = g_gps.unixTime(nowMs);
+    fix.timeS = g_trackTimed ? epoch : (nowMs - g_trackBaseMs) / 1000;
 
     // Przechyl ma sens tylko przy skalibrowanym montazu — bez kalibracji uklad
     // odniesienia jest przypadkowy, wiec do sladu idzie zero zamiast smiecia.
