@@ -97,6 +97,17 @@ public:
     /// smieci z poprzedniej proby nie liczyly sie do nastepnej.
     void reset();
 
+    /// Zapomina, co modul mowil DO TEJ PORY — fix, jakosc i niedokonczone
+    /// zdanie — ale zostawia liczniki. Liczniki opisuja jakosc lacza, wiec
+    /// przezywaja odciecie napiecia samemu modulowi; polozenie i czas nie,
+    /// bo po przerwie nie opisuja juz niczego biezacego.
+    ///
+    /// PO CO: odciecie zasilania zostawia w buforach zdanie sprzed przerwy.
+    /// Sparsowane po powrocie, wyglada jak swiezy fix — i tak wlasnie
+    /// (2026-09-05) slad drugiego przejazdu zaczal sie punktem sprzed
+    /// 21 minut, spod knajpy, zamiast od miejsca ruszenia.
+    void forgetFix();
+
 private:
     Sentence finishSentence();
     Sentence parseSentence();

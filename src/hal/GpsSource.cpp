@@ -30,12 +30,37 @@ void GpsSource::setPower(bool on, uint32_t nowMs) {
     M5.Power.setExtOutput(on);
 
     if (on) {
+        // NAJPIERW PUSTY BUFOR, POTEM CZYTANIE. To, co w nim lezy, przyszlo
+        // PRZED odcieciem napiecia modulowi: gasnaca stacyjka konczy jazde
+        // i odcina zasilanie w tej samej iteracji, w ktorej modul nadawal,
+        // wiec ostatnie zdanie zostaje nieprzeczytane. Przelezy caly postoj
+        // i po powrocie zasilania jest pierwsza rzecza, jaka parser widzi —
+        // kompletna, z poprawna suma kontrolna i statusem "A".
+        //
+        // Sparsowane, ustawia `lastFixMs_` na TERAZ, wiec kontrola wieku fixu
+        // (`fixMaxAgeMs`) go nie zatrzymuje: stary odczyt przechodzi jako
+        // biezacy. 2026-09-05 zaczal w ten sposob slad drugiego przejazdu —
+        // punktem spod knajpy z 12:58, 21 minut przed ruszeniem o 13:20.
+        //
+        // Ta petla jest jedynym miejscem, gdzie da sie te bajty odrzucic:
+        // po niej nic juz nie odroznia zdania sprzed przerwy od swiezego.
+        while (serial_.available() > 0) serial_.read();
+
         // Modul potrzebuje chwili od podania napiecia do pierwszego zdania.
         // Odliczanie proby rusza od tego momentu, zeby cisza przy rozruchu
         // nie zjadla jednego z czterech podejsc.
         probeStartedMs_ = nowMs;
         poweredSinceMs_ = nowMs;
-        if (!locked_) parser_.reset();
+
+        // Pozycja i czas sprzed przerwy nie opisuja juz niczego biezacego.
+        // Liczniki zdan przezywaja przerwe tylko przy dobranych ustawieniach
+        // portu: przy trwajacej probie zeruje je `reset()`, bo tam sluza do
+        // oceny, czy ta kombinacja pinu i predkosci w ogole dziala.
+        if (locked_) {
+            parser_.forgetFix();
+        } else {
+            parser_.reset();
+        }
     }
 }
 

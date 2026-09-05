@@ -344,6 +344,67 @@ void test_utrata_fixu_zeruje_pozycje() {
     TEST_ASSERT_EQUAL_INT32(0, parser.fix().lonE5);
 }
 
+// ── Przerwa w zasilaniu modulu ─────────────────────────────────────────────
+
+/// 2026-09-05, przejazd 70: slad zaczynal sie punktem spod knajpy z 12:58,
+/// 21 minut przed ruszeniem o 13:20 — z tymi samymi wspolrzednymi, co ostatni
+/// punkt poprzedniej trasy. Zdanie z chwili gasniecia stacyjki przelezalo caly
+/// postoj w buforze UART-u i po powrocie zasilania weszlo jako biezacy fix.
+///
+/// Po odcieciu napiecia modulowi parser nie ma prawa dalej twierdzic, ze wie,
+/// gdzie jest i ktora godzina.
+void test_odciecie_zasilania_kasuje_fix_sprzed_przerwy() {
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, rmcWithPosition("5008.1234", "N", "01925.4321", "E"));
+    TEST_ASSERT_TRUE(parser.fix().valid);
+    TEST_ASSERT_EQUAL_INT32(5013539, parser.fix().latE5);
+    TEST_ASSERT_NOT_EQUAL(0, parser.fix().unixTime);
+
+    parser.forgetFix();
+
+    TEST_ASSERT_FALSE(parser.fix().valid);
+    TEST_ASSERT_EQUAL_INT32(0, parser.fix().latE5);
+    TEST_ASSERT_EQUAL_INT32(0, parser.fix().lonE5);
+    TEST_ASSERT_EQUAL_UINT32(0, parser.fix().unixTime);
+    TEST_ASSERT_EQUAL_UINT8(0, parser.fix().satellites);
+}
+
+/// Liczniki zdan opisuja jakosc lacza, a nie polozenie: raz dobrane ustawienia
+/// portu maja przezyc odciecie napiecia modulowi. Zerowanie zostaje przy
+/// `reset()`, bo tam liczniki sluza do oceny, czy proba w ogole sie udala.
+void test_przerwa_zostawia_liczniki_a_reset_je_kasuje() {
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, rmcWithKnots("012.0"));
+    const uint32_t valid = parser.validSentences();
+    TEST_ASSERT_EQUAL_UINT32(2, valid);
+
+    parser.forgetFix();
+    TEST_ASSERT_EQUAL_UINT32(valid, parser.validSentences());
+
+    parser.reset();
+    TEST_ASSERT_EQUAL_UINT32(0, parser.validSentences());
+    TEST_ASSERT_EQUAL_UINT32(0, parser.rejectedSentences());
+}
+
+/// Modul urywa sie w polowie linii, bo napiecie znika miedzy znakami. Pierwsze
+/// bajty po powrocie nie moga sie do tej polowki dokleic — sklejka opisywalaby
+/// dwie chwile oddalone o caly postoj.
+void test_zdanie_urwane_odcieciem_nie_skleja_sie_z_nowym() {
+    NmeaParser parser;
+    feedAll(parser, goodGga());
+    feedAll(parser, "$GNRMC,120000.00,A,5008.1234,N,019");  // tu gasnie stacyjka
+
+    parser.forgetFix();
+
+    feedAll(parser, goodGga());
+    const Sentence last = feedAll(parser, rmcWithPosition("5100.0000", "N", "02000.0000", "E"));
+    TEST_ASSERT_EQUAL(static_cast<int>(Sentence::Rmc), static_cast<int>(last));
+    TEST_ASSERT_TRUE(parser.fix().valid);
+    TEST_ASSERT_EQUAL_INT32(5100000, parser.fix().latE5);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_rmc_with_fix_gives_speed_in_kmh);
@@ -368,5 +429,8 @@ int main(int, char**) {
     RUN_TEST(test_brak_polkuli_uniewaznia_fix);
     RUN_TEST(test_pozycja_poza_zakresem_jest_odrzucana);
     RUN_TEST(test_utrata_fixu_zeruje_pozycje);
+    RUN_TEST(test_odciecie_zasilania_kasuje_fix_sprzed_przerwy);
+    RUN_TEST(test_przerwa_zostawia_liczniki_a_reset_je_kasuje);
+    RUN_TEST(test_zdanie_urwane_odcieciem_nie_skleja_sie_z_nowym);
     return UNITY_END();
 }

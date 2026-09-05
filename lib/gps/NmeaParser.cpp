@@ -303,15 +303,22 @@ bool NmeaParser::qualityOk() const {
 }
 
 void NmeaParser::reset() {
+    forgetFix();
+    validSentences_ = 0;
+    rejectedSentences_ = 0;
+}
+
+void NmeaParser::forgetFix() {
     fix_ = NmeaFix{};
+    // Niedokonczone zdanie tez idzie do kosza: przy odcieciu napiecia modul
+    // urywa sie w polowie linii, a doklejenie do niej pierwszych bajtow po
+    // powrocie daloby sklejke z dwoch chwil oddalonych o caly postoj.
     length_ = 0;
     collecting_ = false;
     overflow_ = false;
     satellites_ = 0;
     hdop_ = 0.0f;
     sawGga_ = false;
-    validSentences_ = 0;
-    rejectedSentences_ = 0;
 }
 
 }  // namespace gps
