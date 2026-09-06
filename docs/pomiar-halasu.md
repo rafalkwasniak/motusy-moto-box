@@ -270,20 +270,36 @@ JEDNĄ REGUŁĄ i nie ma powodu jej łamać:
 - wybieg 2 s po hamowaniu działa tak samo;
 - przejazd zaczyna się od przekroczenia 5 km/h, nie od włączenia stacyjki.
 
-### 9.1. Okno na granicy bramki — problem, który nim nie jest
+### 9.1. Okno na granicy bramki — trzeba było kodu
 
 Filtr A i ważenie Fast pracują **bez przerwy**, gdy mikrofon jest włączony
 (zerowanie ich między oknami zafałszowałoby narastanie). Okno `SustainedLevel`
 też jest karmione ciągle. Uzbrajamy wyłącznie **zapamiętywanie maksimum**,
 dopiero po otwarciu bramki.
 
-Co z oknem, które w połowie leży przed otwarciem bramki, czyli zawiera ciszę
-z postoju? Odpowiedź daje sama konstrukcja metryki: skoro `L_sus` bierze **niski
-percentyl** okna, cisza może wynik tylko **obniżyć**, nigdy podnieść. Błąd idzie
-w stronę bezpieczną — możemy przegapić hałas z pierwszych pięciu sekund ruszania,
-ale nie możemy niczego zawyżyć.
+Pierwsza wersja tego rozdziału twierdziła, że to wystarczy — rozumowanie było
+takie, że skoro `L_sus` bierze **niski percentyl** okna, to cisza z postoju może
+wynik tylko obniżyć, nigdy podnieść, więc błąd idzie w stronę bezpieczną.
 
-**Nie trzeba żadnego kodu na ten przypadek.**
+**Rozumowanie było niepełne i test to złapał** (`pio test -e native`, 2026-09-06).
+Prawdą jest, że *cisza* przed bramką nie zawyża. Ale przed bramką nie musi być
+cicho: okno jest **przesuwne**, więc zaraz po otwarciu bramki niesie jeszcze pięć
+sekund dźwięku sprzed niej — a przed bramką motocykl stoi na czerwonym świetle
+i ktoś kręci gazem. **Blip na postoju ustanawiałby wtedy rekord całego przejazdu**,
+czyli dokładnie to, czemu bramka miała zapobiec. Przypadek nie jest hipotetyczny;
+to najzwyklejsza rzecz, jaką się na motocyklu robi.
+
+**Poprawka:** maksimum zbieramy dopiero, gdy okno **w całości** pochodzi z czasu
+po otwarciu bramki. `NoiseMeter` liczy kroki od jej otwarcia i uzbraja się po
+`windowSec`; zamknięcie bramki zeruje licznik.
+
+Koszt: pierwsze 5 s po **każdym** otwarciu bramki nie może ustanowić rekordu —
+także po postoju na światłach. Przyjęty świadomie: metryka ma opisywać jazdę,
+a nie postój, a przy pięciosekundowym oknie krótszej drogi nie ma.
+
+> Warto to zapamiętać jako wzorzec: to już drugi raz, gdy „bramka otwarta"
+> okazało się za słabym warunkiem. Pierwszy raz przy prędkości maksymalnej
+> (§16.3 architektury — degradacja stosowana przed pierwszym fixem).
 
 ---
 
