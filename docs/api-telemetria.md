@@ -426,6 +426,10 @@ Warto sprawdzić cztery rzeczy:
 
 ## 9. Co zmienił pomiar hałasu (2026-09-06)
 
+> Gotowiec dla strony serwera — migracja, walidacja, kontroler i zapytania
+> weryfikacyjne — leży w osobnym dokumencie:
+> [api-halas-implementacja-laravel.md](api-halas-implementacja-laravel.md).
+
 Przesyłka dostaje **pięć nowych pól** przy każdym przejeździe. Nic istniejącego
 się nie zmienia, więc starsze firmware i nowy serwer współpracują dalej.
 
