@@ -21,6 +21,10 @@ constexpr const char* kKeyHistory = "hist";
 constexpr const char* kKeyRideSeq = "seq";
 constexpr const char* kKeySent = "sent";
 constexpr const char* kKeyRideDuration = "rdur";
+/// Halas: biezacy przejazd i historia. Klucze rownolegle, jak `rdur`/`hdur` —
+/// dlatego nie wymagaly podniesienia kSchemaVersion.
+constexpr const char* kKeyRideNoise = "rnoi";
+constexpr const char* kKeyHistoryNoise = "hnoi";
 constexpr const char* kKeyHistoryDuration = "hdur";
 constexpr const char* kKeyHistoryTime = "hts";
 constexpr const char* kKeySsid = "ssid";
@@ -42,6 +46,10 @@ constexpr size_t kHistoryDurationBytes =
 /// Znaczniki czasu przejazdow z historii — kolejny klucz rownolegly, z tego
 /// samego powodu co czasy trwania.
 constexpr size_t kHistoryTimeBytes = motion::RideHistory::kCapacity * sizeof(uint32_t);
+/// Pomiary halasu z historii — kolejny klucz rownolegly. Wpis ma staly
+/// rozmiar, wiec pozycje liczy arytmetyka, a nie parsowanie.
+constexpr size_t kHistoryNoiseBytes =
+    motion::RideHistory::kCapacity * noise::RideNoise::kPackedBytes;
 
 void packFloat(uint8_t*& cursor, float value) {
     std::memcpy(cursor, &value, sizeof(float));
@@ -160,6 +168,16 @@ LoadResult Store::load(PersistentState& out) {
     out.sentThrough = prefs_.getUInt(kKeySent, 0);
     out.rideDurationS = prefs_.getUInt(kKeyRideDuration, 0);
 
+    {
+        // Brak klucza (pamiec sprzed mikrofonu) zostawia wartosc domyslna,
+        // czyli "brak pomiaru" — a nie cichy przejazd.
+        uint8_t noiseBuffer[noise::RideNoise::kPackedBytes];
+        if (prefs_.getBytes(kKeyRideNoise, noiseBuffer, sizeof(noiseBuffer)) ==
+            sizeof(noiseBuffer)) {
+            noise::unpackRideNoise(noiseBuffer, out.rideNoise);
+        }
+    }
+
     prefs_.getString(kKeySsid, out.integration.ssid, sizeof(out.integration.ssid));
     prefs_.getString(kKeyPassword, out.integration.password, sizeof(out.integration.password));
     prefs_.getString(kKeyToken, out.integration.token, sizeof(out.integration.token));
@@ -190,8 +208,23 @@ LoadResult Store::load(PersistentState& out) {
                 prefs_.getBytes(kKeyHistoryTime, timestamps, kHistoryTimeBytes) ==
                 kHistoryTimeBytes;
 
+            // I tak samo halas: przejazdy sprzed mikrofonu ida bez pomiaru,
+            // czyli z `max_noise: null` w przesylce.
+            noise::RideNoise noises[motion::RideHistory::kCapacity] = {};
+            uint8_t noiseBuffer[kHistoryNoiseBytes];
+            const bool haveNoise =
+                prefs_.getBytes(kKeyHistoryNoise, noiseBuffer, kHistoryNoiseBytes) ==
+                kHistoryNoiseBytes;
+            if (haveNoise) {
+                for (size_t i = 0; i < motion::RideHistory::kCapacity; ++i) {
+                    noise::unpackRideNoise(
+                        noiseBuffer + i * noise::RideNoise::kPackedBytes, noises[i]);
+                }
+            }
+
             out.history.restore(rides, haveDurations ? durations : nullptr, count,
-                                haveTimestamps ? timestamps : nullptr);
+                                haveTimestamps ? timestamps : nullptr,
+                                haveNoise ? noises : nullptr);
         }
     }
 
@@ -207,7 +240,8 @@ LoadResult Store::load(PersistentState& out) {
 }
 
 bool Store::saveResults(const motion::RideValues& overall, const motion::RideValues& ride,
-                        bool rideArchived, uint32_t rideDurationS) {
+                        bool rideArchived, uint32_t rideDurationS,
+                        const noise::RideNoise& rideNoise) {
     if (!available_) return false;
 
     uint8_t buffer[kRideValuesBytes];
@@ -219,6 +253,11 @@ bool Store::saveResults(const motion::RideValues& overall, const motion::RideVal
     if (prefs_.putBytes(kKeyRide, buffer, kRideValuesBytes) != kRideValuesBytes) return false;
 
     prefs_.putUInt(kKeyRideDuration, rideDurationS);
+
+    uint8_t noiseBuffer[noise::RideNoise::kPackedBytes];
+    noise::packRideNoise(rideNoise, noiseBuffer);
+    prefs_.putBytes(kKeyRideNoise, noiseBuffer, sizeof(noiseBuffer));
+
     prefs_.putUChar(kKeyArchived, rideArchived ? 1 : 0);
     prefs_.putUInt(kKeyVersion, kSchemaVersion);
     return true;
@@ -251,6 +290,16 @@ bool Store::saveHistory(const motion::RideHistory& history) {
         timestamps[i] = history.recordedAtAt(i);
     }
     if (prefs_.putBytes(kKeyHistoryTime, timestamps, kHistoryTimeBytes) != kHistoryTimeBytes) {
+        return false;
+    }
+
+    uint8_t noiseBuffer[kHistoryNoiseBytes];
+    for (size_t i = 0; i < motion::RideHistory::kCapacity; ++i) {
+        noise::packRideNoise(history.noiseAt(i),
+                             noiseBuffer + i * noise::RideNoise::kPackedBytes);
+    }
+    if (prefs_.putBytes(kKeyHistoryNoise, noiseBuffer, kHistoryNoiseBytes) !=
+        kHistoryNoiseBytes) {
         return false;
     }
 

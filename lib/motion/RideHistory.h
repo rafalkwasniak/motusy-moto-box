@@ -16,6 +16,7 @@
 #include <cstdint>
 
 #include "RideMetrics.h"
+#include "RideNoise.h"
 
 namespace motion {
 
@@ -35,7 +36,12 @@ public:
     /// schematu.
     ///
     /// @return true jesli przejazd zostal zapisany
-    bool push(const RideValues& ride, uint32_t durationS = 0, uint32_t recordedAt = 0);
+    ///
+    /// Halas jedzie obok z tego samego powodu, co czas trwania: nie jest
+    /// pokazywany na ekranie, wiec nie nalezy do `RideValues`, a dolozenie
+    /// go tam podnioslo by wersje schematu i skasowalo kalibracje montazu.
+    bool push(const RideValues& ride, uint32_t durationS = 0, uint32_t recordedAt = 0,
+              const noise::RideNoise& noise = {});
 
     size_t count() const { return count_; }
 
@@ -51,23 +57,31 @@ public:
     /// GPS albo wpis sprzed modulu) i idzie do API jako null.
     uint32_t recordedAtAt(size_t index) const;
 
+    /// Pomiar halasu przejazdu. Poza zakresem oraz dla wpisow sprzed
+    /// wprowadzenia mikrofonu zwraca wartosc bez pomiaru (`measured()`
+    /// falszem), a nie zero — cichy przejazd to co innego niz jego brak.
+    const noise::RideNoise& noiseAt(size_t index) const;
+
     void clear();
 
     /// Odtworzenie z pamieci nieulotnej: `rides[0]` to najnowszy przejazd.
     /// `durations` i `recordedAt` moga byc nullptr — wtedy odpowiednie
     /// wartosci sa zerowe (wpisy sprzed wprowadzenia tych pomiarow).
     void restore(const RideValues* rides, const uint32_t* durations, size_t count,
-                 const uint32_t* recordedAt = nullptr);
+                 const uint32_t* recordedAt = nullptr,
+                 const noise::RideNoise* noise = nullptr);
 
 private:
     RideValues slots_[kCapacity] = {};
     uint32_t durations_[kCapacity] = {};
     uint32_t recordedAt_[kCapacity] = {};
+    noise::RideNoise noise_[kCapacity] = {};
     /// Indeks najnowszego wpisu w buforze pierscieniowym.
     size_t head_ = 0;
     size_t count_ = 0;
 
     static const RideValues kEmpty;
+    static const noise::RideNoise kNoNoise;
 };
 
 /// Czy zestaw nie zawiera zadnego pomiaru.

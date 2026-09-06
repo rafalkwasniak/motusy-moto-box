@@ -10,6 +10,7 @@
 
 #include "ConfigCommand.h"
 #include "IntegrationConfig.h"
+#include "NoiseMeter.h"
 #include "TelemetryJson.h"
 
 using namespace telemetry;
@@ -54,7 +55,13 @@ void test_payload_without_gps_sends_nulls() {
         "{\"device_id\":\"a1b2c3d4e5f6\",\"fw\":\"1.0.0\",\"calibrated\":true,\"rides\":["
         "{\"seq\":7,\"recorded_at\":null,\"duration_s\":1832,"
         "\"lean_left_deg\":42,\"lean_right_deg\":38,"
-        "\"accel_g\":0.75,\"brake_g\":0.50,\"speed_kmh\":null}]}",
+        "\"accel_g\":0.75,\"brake_g\":0.50,\"speed_kmh\":null,"
+        // Halas: brak pomiaru to null, ale liczniki diagnostyczne ida
+        // ZAWSZE — bez nich cicha jazda i martwy mikrofon wygladalyby
+        // identycznie, a wartosci nie ma na ekranie, wiec nie ma jak
+        // tego zobaczyc inaczej.
+        "\"max_noise_db\":null,\"noise_at_speed_kmh\":null,"
+        "\"noise_clipped\":0,\"noise_dropped\":0,\"noise_cal\":0}]}",
         out);
     TEST_ASSERT_EQUAL_UINT32(std::strlen(out), len);
 }
@@ -87,7 +94,7 @@ void test_lean_and_speed_are_whole_numbers() {
 
     TEST_ASSERT_NOT_NULL(std::strstr(out, "\"lean_left_deg\":26,"));
     TEST_ASSERT_NOT_NULL(std::strstr(out, "\"lean_right_deg\":25,"));
-    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":138}"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":138,"));
 
     // Sily zostaja ulamkowe: tam precyzja jest prawdziwa, bo akcelerometr
     // mierzy bezposrednio, a ekran pokazuje dokladnie te sama wartosc.
@@ -105,11 +112,11 @@ void test_speed_never_reports_zero() {
     // Ledwie drgnelo, ale GPS to widzial.
     ride.values.maxSpeedKmh = 0.4f;
     TEST_ASSERT_TRUE(buildPayload(testDevice(), &ride, 1, out, sizeof(out)) > 0);
-    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":1}"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":1,"));
 
     ride.values.maxSpeedKmh = 1.4f;
     TEST_ASSERT_TRUE(buildPayload(testDevice(), &ride, 1, out, sizeof(out)) > 0);
-    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":1}"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"speed_kmh\":1,"));
 
     // Nie bylo czym mierzyc — dopiero to jest null.
     ride.values.maxSpeedKmh = 0.0f;
@@ -404,12 +411,70 @@ void test_command_leaves_foreign_lines_alone() {
     TEST_ASSERT_EQUAL_STRING("Dom", config.ssid);
 }
 
+/// Brak pomiaru halasu to null, nie zero — ta sama zasada, co przy predkosci.
+/// Przejazd z niedzialajacym mikrofonem nie moze wygladac jak cicha jazda.
+void test_halas_bez_pomiaru_idzie_jako_null() {
+    RideRecord ride = testRide(3);
+    char out[kMaxPayloadBytes];
+
+    TEST_ASSERT_TRUE(buildPayload(testDevice(), &ride, 1, out, sizeof(out)) > 0);
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"max_noise_db\":null"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"noise_at_speed_kmh\":null"));
+}
+
+/// Poziom idzie z jednym miejscem po przecinku: koszyk histogramu ma 0,5 dB,
+/// wiec druga cyfra bylaby fikcja, a pelne decybele gubilyby polowe kroku.
+void test_halas_idzie_z_jednym_miejscem_po_przecinku() {
+    RideRecord ride = testRide(4);
+    ride.noise = noise::makeRideNoise(108.35f, 62.0f, 0, 0, 1);
+    char out[kMaxPayloadBytes];
+
+    TEST_ASSERT_TRUE(buildPayload(testDevice(), &ride, 1, out, sizeof(out)) > 0);
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"max_noise_db\":108.4"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"noise_at_speed_kmh\":62"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"noise_cal\":1"));
+}
+
+/// Liczniki jada nawet bez pomiaru — to one odrozniaja cicha jazde od awarii.
+void test_liczniki_halasu_ida_takze_bez_pomiaru() {
+    RideRecord ride = testRide(5);
+    ride.noise = noise::makeRideNoise(noise::NoiseMeter::kNoData, 0.0f, 12, 480, 1);
+    char out[kMaxPayloadBytes];
+
+    TEST_ASSERT_TRUE(buildPayload(testDevice(), &ride, 1, out, sizeof(out)) > 0);
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"max_noise_db\":null"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"noise_clipped\":12"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"noise_dropped\":480"));
+}
+
+/// Pelna przesylka po dolozeniu piatki pol halasu nadal miesci sie w buforze.
+/// Gdyby przestala, wysylka cichnelaby przy komplecie zaleglosci — czyli
+/// dokladnie wtedy, gdy jest najbardziej potrzebna.
+void test_pelna_przesylka_z_halasem_miesci_sie_w_buforze() {
+    RideRecord rides[kMaxRidesPerPayload];
+    for (size_t i = 0; i < kMaxRidesPerPayload; ++i) {
+        rides[i] = testRide(static_cast<uint32_t>(100 + i));
+        rides[i].recordedAt = 1756400000LL;
+        rides[i].values.maxSpeedKmh = 199.0f;
+        rides[i].noise = noise::makeRideNoise(119.9f, 199.0f, 65535, 65535, 9);
+    }
+    char out[kMaxPayloadBytes];
+
+    const size_t len = buildPayload(testDevice(), rides, kMaxRidesPerPayload, out, sizeof(out));
+    TEST_ASSERT_TRUE(len > 0);
+    TEST_ASSERT_TRUE(len < kMaxPayloadBytes);
+}
+
 int main(int, char**) {
     UNITY_BEGIN();
     RUN_TEST(test_payload_without_gps_sends_nulls);
     RUN_TEST(test_payload_with_gps_fills_time_and_speed);
     RUN_TEST(test_lean_and_speed_are_whole_numbers);
     RUN_TEST(test_speed_never_reports_zero);
+    RUN_TEST(test_halas_bez_pomiaru_idzie_jako_null);
+    RUN_TEST(test_halas_idzie_z_jednym_miejscem_po_przecinku);
+    RUN_TEST(test_liczniki_halasu_ida_takze_bez_pomiaru);
+    RUN_TEST(test_pelna_przesylka_z_halasem_miesci_sie_w_buforze);
     RUN_TEST(test_payload_keeps_ride_order);
     RUN_TEST(test_empty_payload_is_valid_json);
     RUN_TEST(test_full_history_fits_in_buffer);

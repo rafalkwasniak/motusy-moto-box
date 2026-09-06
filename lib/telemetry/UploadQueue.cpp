@@ -54,6 +54,7 @@ size_t UploadQueue::collect(const motion::RideHistory& history, RideRecord* out,
         record.values = history.at(index);
         record.durationS = history.durationAt(index);
         record.recordedAt = history.recordedAtAt(index);
+        record.noise = history.noiseAt(index);
         ++written;
     }
     return written;

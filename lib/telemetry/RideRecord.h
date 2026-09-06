@@ -22,6 +22,7 @@
 #include <cstdint>
 
 #include "RideMetrics.h"
+#include "RideNoise.h"
 
 namespace telemetry {
 
@@ -51,6 +52,9 @@ struct RideRecord {
     uint32_t durationS = 0;
     /// Unix timestamp konca przejazdu; 0 = nieznany (null w JSON).
     long long recordedAt = 0;
+    /// Pomiar halasu. Tak jak `durationS` i `recordedAt`: serwer tego
+    /// potrzebuje, ekran nie — patrz lib/noise/RideNoise.h.
+    noise::RideNoise noise{};
 };
 
 }  // namespace telemetry

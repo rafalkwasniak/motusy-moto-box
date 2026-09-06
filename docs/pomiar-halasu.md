@@ -437,30 +437,41 @@ Wartości kontrolne filtru A: **−19,1 dB @ 100 Hz**, −3,2 @ 500 Hz,
 
 ---
 
-## 12. Kontrakt API
+## 12. Kontrakt API — zrobione
 
-Do [api-telemetria.md](api-telemetria.md) i `TelemetryJson` dochodzą pola z §5.
+Pięć pól przy każdym przejeździe, opisane w
+[api-telemetria.md §9](api-telemetria.md):
 
-Zasada z `speed_kmh` przenosi się bez zmian: **brak pomiaru to `null`, nie zero.**
-Przejazd z niedziałającym mikrofonem albo sprzed tej wersji firmware nie może
-wyglądać jak cicha jazda.
+```json
+"speed_kmh": 142,
+"max_noise_db": 108.4,
+"noise_at_speed_kmh": 62,
+"noise_clipped": 0,
+"noise_dropped": 0,
+"noise_cal": 1
+```
 
-Po stronie serwera: kolumna na wartość, kolumny na liczniki diagnostyczne
-i `noise_cal`. Nic w istniejącym protokole się nie zmienia, więc stare urządzenie
-i nowy serwer współpracują dalej.
+Zasada z `speed_kmh` przeniesiona bez zmian: **brak pomiaru to `null`, nie zero.**
+Liczniki diagnostyczne idą **zawsze**, także przy braku pomiaru — bez nich cicha
+jazda i martwy mikrofon wyglądałyby identycznie.
+
+Nic w istniejącym protokole się nie zmienia, więc stare urządzenie i nowy serwer
+współpracują dalej. Po stronie Laravela: migracja kolumn i walidacja
+`sometimes` (odrzucenie całej przesyłki z powodu braku nowych pól zakleszczyłoby
+urządzenie w terenie).
 
 ---
 
 ## 13. Plan wdrożenia
 
-| # | Klocek | Co powstaje | Kryterium zaliczenia |
+| # | Klocek | Stan | Wynik |
 |---|---|---|---|
-| **N0** | Mikrofon żyje | `src/hal/MicSource`, komenda `HALAS` na USB | liczba na porcie reaguje na kręcenie gazem |
-| **N1** | Algorytm | `lib/noise/` + testy native | 6 testów z §11.1 zielonych **na Macu** |
-| **N2** | Wzmocnienie i zapas | `kAdcScaleStep` 5, `K` = 133,6, liczniki | silnik na obrotach bez przesterowań; podłoga zgodna z modelem |
-| **N3** | Wpięcie w przejazd | zadanie audio, bramka, `RideRecord` + `RideHistory` + klucze NVS | wartość przeżywa cykl zasilania, `kSchemaVersion` nietknięta |
-| **N4** | Kontrakt i wysyłka | `TelemetryJson` + `api-telemetria.md` + kolumny w Laravelu | przejazd z hałasem widoczny w panelu |
-| **N5** | Jazda kontrolna | — | liczniki zerowe, `noise_at_speed` rozrzucone względem `max_speed` |
+| **N0** | Mikrofon żyje | ✅ | 48 kHz, kanał prawy, 0 zgubionych próbek; poziom reaguje na dźwięk |
+| **N1** | Algorytm | ✅ | `lib/noise/`, ważenie A trafia w IEC 61672 (0,004 dB @ 1 kHz) |
+| **N2** | Wzmocnienie i kalibracja | ✅ | `K = 126,4`, nachylenie 0,94, podłoga własna ~51 dB(A) |
+| **N3** | Wpięcie w przejazd | ✅ | rekord obok `RideValues`, `kSchemaVersion` nietknięta — historia przeżyła |
+| **N4** | Kontrakt i wysyłka | ✅ firmware / ⏳ serwer | pięć pól w JSON; migracja w Laravelu po stronie użytkownika |
+| **N5** | Jazda kontrolna | ⏳ | liczniki zerowe, `noise_at_speed` rozrzucone względem `speed_kmh` |
 
 Trzy uwagi do kolejności:
 

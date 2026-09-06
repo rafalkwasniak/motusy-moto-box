@@ -130,6 +130,40 @@ void writeRide(Writer& w, const RideRecord& ride) {
         w.text("null");
     }
 
+    // ── Halas ──────────────────────────────────────────────────────────────
+    // Ta sama zasada, co przy predkosci: BRAK POMIARU TO null, NIE ZERO.
+    // Przejazd z niedzialajacym mikrofonem albo sprzed tej wersji firmware nie
+    // moze wygladac jak cicha jazda — a wygladalby, bo zero jest liczba.
+    w.text(",\"max_noise_db\":");
+    if (ride.noise.measured()) {
+        w.number(static_cast<float>(ride.noise.maxDb10) / 10.0f, 1);
+    } else {
+        w.text("null");
+    }
+
+    // Predkosc w chwili rekordu halasu. Zestawiona z `speed_kmh` tego samego
+    // przejazdu rozstrzyga, czy slychac wydech, czy wiatr: jesli te dwie
+    // liczby prawie zawsze sa rowne, mierzymy powietrze i `max_noise_db` jest
+    // druga kolumna predkosci. Patrz docs/pomiar-halasu.md §6.
+    w.text(",\"noise_at_speed_kmh\":");
+    if (ride.noise.measured() && ride.noise.atSpeedKmh > 0) {
+        w.uint32(ride.noise.atSpeedKmh);
+    } else {
+        w.text("null");
+    }
+
+    // Diagnostyka jedzie ZAWSZE, takze przy braku pomiaru: to ona odrozni
+    // cicha jazde od martwego mikrofonu, a bez ekranu nie ma innej drogi.
+    // Niezerowe `noise_clipped` znaczy, ze wynik jest ">= X", nigdy "X".
+    w.text(",\"noise_clipped\":");
+    w.uint32(ride.noise.clipped);
+    w.text(",\"noise_dropped\":");
+    w.uint32(ride.noise.dropped);
+    // Znacznik serii pomiarowej: po nim serwer odroznia dwie serie od jednej,
+    // gdy zmieni sie wzmocnienie albo montaz urzadzenia.
+    w.text(",\"noise_cal\":");
+    w.uint32(ride.noise.calibration);
+
     w.text("}");
 }
 

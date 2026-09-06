@@ -93,7 +93,12 @@ opłaca się dzielić na pojedyncze żądania.
       "lean_right_deg": 38,
       "accel_g": 0.75,
       "brake_g": 0.50,
-      "speed_kmh": null
+      "speed_kmh": null,
+      "max_noise_db": 108.4,
+      "noise_at_speed_kmh": 62,
+      "noise_clipped": 0,
+      "noise_dropped": 0,
+      "noise_cal": 1
     }
   ]
 }
@@ -112,6 +117,11 @@ opłaca się dzielić na pojedyncze żądania.
 | `rides[].accel_g` | float, 2 miejsca | maksymalne przyspieszenie |
 | `rides[].brake_g` | float, 2 miejsca | maksymalne hamowanie |
 | `rides[].speed_kmh` | **int** lub null | prędkość maksymalna, pełne km/h; `null` gdy brak GPS |
+| `rides[].max_noise_db` | float, 1 miejsce, lub null | najgłośniejszy fragment przejazdu w dB(A); `null` gdy nie mierzono |
+| `rides[].noise_at_speed_kmh` | int lub null | prędkość w chwili ustanowienia rekordu hałasu |
+| `rides[].noise_clipped` | int | ile próbek dobiło do pełnej skali; niezerowe = wynik jest „≥ X" |
+| `rides[].noise_dropped` | int | ile próbek przepadło na przerwach w strumieniu I²S |
+| `rides[].noise_cal` | int | znacznik serii pomiarowej; zmienia się przy zmianie wzmocnienia lub montażu |
 
 **`speed_kmh` nigdy nie przyjdzie jako `0`.** Są tylko dwie możliwości:
 
@@ -132,7 +142,7 @@ co pójdzie po kablu — ten sam ciąg znak w znak jest w
 `test/test_telemetry/test_telemetry.cpp`:
 
 ```
-{"device_id":"a1b2c3d4e5f6","fw":"1.0.0","calibrated":true,"rides":[{"seq":7,"recorded_at":null,"duration_s":1832,"lean_left_deg":42,"lean_right_deg":38,"accel_g":0.75,"brake_g":0.50,"speed_kmh":null}]}
+{"device_id":"a1b2c3d4e5f6","fw":"1.0.0","calibrated":true,"rides":[{"seq":7,"recorded_at":null,"duration_s":1832,"lean_left_deg":42,"lean_right_deg":38,"accel_g":0.75,"brake_g":0.50,"speed_kmh":null,"max_noise_db":null,"noise_at_speed_kmh":null,"noise_clipped":0,"noise_dropped":0,"noise_cal":0}]}
 ```
 
 Przechył i prędkość są **liczbami całkowitymi**. Przyspieszenie i hamowanie mają
@@ -278,6 +288,11 @@ Schema::create('rides', function (Blueprint $table) {
     $table->decimal('accel_g', 4, 2);
     $table->decimal('brake_g', 4, 2);
     $table->decimal('speed_kmh', 5, 1)->nullable();      // null != 0
+    $table->decimal('max_noise_db', 5, 1)->nullable();   // null != cisza
+    $table->unsignedSmallInteger('noise_at_speed_kmh')->nullable();
+    $table->unsignedInteger('noise_clipped')->default(0);
+    $table->unsignedInteger('noise_dropped')->default(0);
+    $table->unsignedTinyInteger('noise_cal')->default(0);
     $table->string('fw', 16);
     $table->boolean('calibrated');
     $table->timestamps();
@@ -313,6 +328,14 @@ public function rules(): array
         'rides.*.accel_g'           => ['required', 'numeric'],
         'rides.*.brake_g'           => ['required', 'numeric'],
         'rides.*.speed_kmh'         => ['present', 'nullable', 'numeric'],
+        // Pola halasu doszly 2026-09-06. `sometimes`, bo starsze firmware
+        // ich nie wysyla — a odrzucenie calej przesylki z tego powodu
+        // zakleszczyloby urzadzenie w terenie.
+        'rides.*.max_noise_db'       => ['sometimes', 'nullable', 'numeric'],
+        'rides.*.noise_at_speed_kmh' => ['sometimes', 'nullable', 'integer'],
+        'rides.*.noise_clipped'      => ['sometimes', 'integer'],
+        'rides.*.noise_dropped'      => ['sometimes', 'integer'],
+        'rides.*.noise_cal'          => ['sometimes', 'integer'],
     ];
 }
 ```
@@ -397,3 +420,49 @@ Warto sprawdzić cztery rzeczy:
    `accepted_through`,
 4. zły token daje 401 — urządzenie po tym kodzie przestaje próbować, więc
    pomyłka w konfiguracji jest widoczna od razu, a nie po dobie.
+
+
+---
+
+## 9. Co zmienił pomiar hałasu (2026-09-06)
+
+Przesyłka dostaje **pięć nowych pól** przy każdym przejeździe. Nic istniejącego
+się nie zmienia, więc starsze firmware i nowy serwer współpracują dalej.
+
+### Dlaczego `max_noise_db` bywa `null`
+
+Ta sama zasada, co przy `speed_kmh`: **brak pomiaru to `null`, nie zero.**
+Przejazd z niedziałającym mikrofonem albo sprzed tej wersji firmware nie może
+wyglądać jak cicha jazda — a wyglądałby, bo zero jest liczbą.
+
+### Po co trzy pola diagnostyczne
+
+Wartość **nie jest pokazywana na ekranie urządzenia** — idzie wyłącznie tutaj.
+Nie ma więc innego sposobu, żeby zauważyć, że pomiar padł, a martwy mikrofon
+nie zgłasza błędu: oddaje podłogę szumu, która wygląda jak cicha jazda.
+
+- **`noise_clipped` niezerowe** → wynik raportować jako „≥ X dB", nigdy „X dB".
+- **`noise_dropped` niezerowe** → pomiar niepełny, część przejazdu przepadła.
+- **`noise_cal`** → znacznik serii. Zmienia się, gdy zmieni się wzmocnienie
+  albo montaż urządzenia. **Przejazdów o różnym `noise_cal` nie wolno porównywać
+  ze sobą** — to dwie różne skale, mimo że obie w dB(A).
+
+### Do czego służy `noise_at_speed_kmh`
+
+Urządzenie siedzi w zadupku motocykla i nie da się z góry rozstrzygnąć, czy
+mikrofon słyszy wydech, czy pęd powietrza. Zestawienie tego pola z `speed_kmh`
+tego samego przejazdu rozstrzyga to na danych:
+
+- rekordy hałasu **rozrzucone** po prędkościach → słychać wydech, metryka działa;
+- `noise_at_speed_kmh` ≈ `speed_kmh` **w każdym przejeździe** → mierzymy wiatr,
+  a `max_noise_db` jest drugą kolumną prędkości maksymalnej.
+
+Zapytanie, które to pokazuje, warto mieć w panelu od początku — inaczej
+odpowiedź na to pytanie nie przyjdzie nigdy.
+
+### Uwaga o skali
+
+Liczba jest **powtarzalna względem samej siebie**, a nie miarodajna bezwzględnie.
+Kalibracja urządzenia obejmowała 64–72 dB(A) przy niepewności stanowiska ±3 dB,
+a mierzone będzie 90–110. Do porównań między przejazdami tego samego urządzenia
+nadaje się w pełni; do porównań między motocyklami — nie.

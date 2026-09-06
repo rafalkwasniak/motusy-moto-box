@@ -20,6 +20,7 @@
 #include "MountCalibration.h"
 #include "RideHistory.h"
 #include "RideMetrics.h"
+#include "RideNoise.h"
 
 namespace hal {
 
@@ -30,6 +31,10 @@ struct PersistentState {
 
     /// Ile juz trwa biezacy przejazd [s] — zeby przezyl restart na baterii (§25).
     uint32_t rideDurationS = 0;
+
+    /// Halas biezacego przejazdu — z tego samego powodu co czas trwania:
+    /// restart na baterii w trakcie jazdy nie moze skasowac rekordu.
+    noise::RideNoise rideNoise{};
 
     /// §16 — stan modulu alarmowego. Domyslnie wlaczony: urzadzenie ma pilnowac
     /// motocykla, wiec brak zapisanego ustawienia nie powinien zostawiac go bez ochrony.
@@ -84,7 +89,8 @@ public:
     /// i czasem trwania biezacego przejazdu.
     /// Wolane okresowo i przy zaniku zasilania.
     bool saveResults(const motion::RideValues& overall, const motion::RideValues& ride,
-                     bool rideArchived, uint32_t rideDurationS);
+                     bool rideArchived, uint32_t rideDurationS,
+                     const noise::RideNoise& rideNoise = {});
 
     /// Zapisuje historie przejazdow wraz z czasami ich trwania.
     /// Wolane przy archiwizacji przejazdu.
@@ -119,6 +125,10 @@ public:
     /// Stan kolejki wysylki (2026-08-29) CELOWO nie podniosl wersji: to dwa
     /// nowe klucze czytane z wartoscia domyslna, a nie zmiana ukladu istniejacych
     /// pol. Podbicie wersji skasowaloby uzytkownikowi kalibracje montazu.
+    ///
+    /// Pomiar halasu (2026-09-06) tak samo: klucze `rnoi` i `hnoi` rownolegle
+    /// do wynikow i historii, z wartoscia domyslna "brak pomiaru". Dlatego
+    /// wgranie tej wersji firmware nie kasuje ani kalibracji, ani historii.
     static constexpr uint32_t kSchemaVersion = 2;
 
 private:

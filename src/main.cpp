@@ -103,6 +103,18 @@ motion::SpeedGate g_speedGate;
 /// Czy biezacy przejazd trafil juz do historii — patrz archiveCurrentRide().
 bool g_rideArchived = false;
 
+/// Rekord halasu BIEZACEGO przejazdu. Zrodlem jest mikrofon, ale to nie on
+/// jest wlascicielem wartosci: mikrofon zyje tylko przy wlaczonej stacyjce
+/// i zaczyna od zera po kazdym restarcie, a przejazd trwa dalej. Ta zmienna
+/// przezywa jedno i drugie — jak `g_rideClock` dla czasu trwania.
+noise::RideNoise g_rideNoise{};
+/// Liczniki sprzed ostatniego uruchomienia mikrofonu. Sam mikrofon liczy od
+/// zera, wiec bez tego przesuniecia restart w trakcie jazdy gubilby
+/// dotychczasowe przesterowania — czyli akurat te informacje, ktora ma
+/// odroznic pomiar niepelny od cichego przejazdu.
+uint32_t g_noiseClippedBase = 0;
+uint32_t g_noiseDroppedBase = 0;
+
 /// Numeracja przejazdow i znacznik wyslania na motusy.top.
 telemetry::UploadQueue g_queue;
 /// Kiedy wolno wlaczyc radio i jak dlugo czekac po nieudanej probie.
@@ -150,6 +162,30 @@ noise::NoiseMeterConfig makeNoiseConfig() {
 }
 
 hal::MicSource g_mic{makeMicConfig()};
+
+/// Nowy przejazd: halas zaczyna sie od zera, tak samo jak rekordy i czas.
+void resetRideNoise() {
+    g_rideNoise = noise::RideNoise{};
+    g_noiseClippedBase = 0;
+    g_noiseDroppedBase = 0;
+    g_mic.resetRide();
+}
+
+/// Przepisuje migawke z mikrofonu do rekordu przejazdu.
+///
+/// PODNOSI, a nie nadpisuje: mikrofon zyje tylko przy wlaczonej stacyjce
+/// i po restarcie zaczyna od zera, a przejazd trwa dalej. Gdyby ta funkcja
+/// przypisywala wprost, restart na baterii w polowie trasy skasowalby
+/// dotychczasowy rekord halasu — czyli dokladnie to, przed czym bronimy
+/// czas trwania przejazdu i slad trasy.
+void updateRideNoise() {
+    if (!g_mic.isRunning()) return;
+
+    const hal::MicSnapshot snap = g_mic.snapshot();
+    g_rideNoise.raiseTo(noise::makeRideNoise(
+        snap.maxNoiseDb, snap.maxNoiseSpeedKmh, g_noiseClippedBase + snap.clipped,
+        g_noiseDroppedBase + snap.dropped, cfg::kNoiseCalibrationVersion));
+}
 
 hal::PowerSourceConfig makePowerConfig() {
     hal::PowerSourceConfig config;
@@ -320,7 +356,7 @@ void archiveCurrentRide() {
     // "przejazd bez zasiegu satelitow" i idzie do API jako null; kolejnosc
     // przejazdow i tak wynika z numeru `seq`, nie z daty.
     if (!g_history.push(g_metrics.currentRide(), g_rideClock.seconds(),
-                        g_gps.unixTime(millis()))) {
+                        g_gps.unixTime(millis()), g_rideNoise)) {
         // Pusty przejazd nie trafia do historii, wiec jego slad nie mialby
         // numeru ani niczego, do czego moglby wrocic.
         g_trackLogger.abortRide();
@@ -347,7 +383,7 @@ void archiveCurrentRide() {
     g_store.saveHistory(g_history);
     g_store.saveUploadState(g_queue.lastSeq(), g_queue.sentThrough());
     g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived,
-                        g_rideClock.seconds());
+                        g_rideClock.seconds(), g_rideNoise);
 }
 
 /// Zapis wynikow wedlug strategii z architektury §6.2: okresowo i tylko gdy
@@ -360,7 +396,7 @@ void saveResultsIfDirty(bool force) {
     if (!force && nowMs - g_lastAutosaveMs < cfg::kAutosaveIntervalMs) return;
 
     if (g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived,
-                            g_rideClock.seconds())) {
+                            g_rideClock.seconds(), g_rideNoise)) {
         g_metrics.clearDirty();
     }
     g_lastAutosaveMs = nowMs;
@@ -409,9 +445,10 @@ void runResultsReset() {
     // Skoro zerujemy OSTATNIA JAZDE, jej czas trwania tez zaczyna sie od nowa —
     // inaczej przejazd o zerowych rekordach mialby polgodzinny czas.
     g_rideClock.reset();
+    resetRideNoise();
     const bool saved =
         g_store.saveResults(g_metrics.overall(), g_metrics.currentRide(), g_rideArchived,
-                            g_rideClock.seconds());
+                            g_rideClock.seconds(), g_rideNoise);
     if (saved) g_metrics.clearDirty();
 
     drawMessage("POMIARY WYZEROWANE", saved ? "" : "BLAD ZAPISU",
@@ -1097,15 +1134,20 @@ void restoreState(bool externalPowerAtBoot) {
         // tamtego przejazdu; dopiero potem zerujemy licznik.
         g_metrics.restore(state.overall, state.ride);
         g_rideClock.restore(state.rideDurationS);
+        g_rideNoise = state.rideNoise;
         archiveCurrentRide();
         g_metrics.startNewRide();
         g_rideClock.reset();
+        resetRideNoise();
         g_metrics.clearDirty();
         g_rideArchived = false;
     } else {
-        // Restart na baterii: przejazd trwa dalej (§25).
+        // Restart na baterii: przejazd trwa dalej (§25) — razem z halasem.
         g_metrics.restore(state.overall, state.ride);
         g_rideClock.restore(state.rideDurationS);
+        g_rideNoise = state.rideNoise;
+        g_noiseClippedBase = g_rideNoise.clipped;
+        g_noiseDroppedBase = g_rideNoise.dropped;
     }
 }
 
@@ -1360,6 +1402,10 @@ void pumpMic(uint32_t nowMs) {
 
     if (wantRunning && !g_mic.isRunning()) {
         if (g_mic.begin(makeNoiseConfig())) {
+            // Mikrofon liczy przesterowania od zera, a przejazd moze juz
+            // jakies miec (restart w trakcie jazdy) — stad przesuniecie.
+            g_noiseClippedBase = g_rideNoise.clipped;
+            g_noiseDroppedBase = g_rideNoise.dropped;
             Serial.printf("[halas] mikrofon wstal: %lu Hz, kanal %s, ADC_VOLUME 0x%02X\n",
                           static_cast<unsigned long>(g_mic.sampleRateHz()),
                           g_mic.usesLeftChannel() ? "lewy" : "prawy",
@@ -1386,6 +1432,8 @@ void pumpMic(uint32_t nowMs) {
 
     const motion::SpeedSample speed = g_gps.speed(nowMs);
     if (speed.valid) g_mic.setSpeedKmh(speed.kmh);
+
+    updateRideNoise();
 }
 
 void refreshDisplay() {
@@ -1840,6 +1888,7 @@ void handleStateEvent(state::DeviceEvent event) {
             driveSiren(guard::AlarmOutput{});
             g_metrics.startNewRide();
             g_rideClock.reset();
+            resetRideNoise();
             g_speedGate.reset();
             if (g_trackEnabled) startTrack();
             g_rideArchived = false;

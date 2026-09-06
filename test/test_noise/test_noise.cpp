@@ -22,6 +22,7 @@
 
 #include "AWeighting.h"
 #include "NoiseMeter.h"
+#include "RideNoise.h"
 #include "SustainedLevel.h"
 #include "TimeWeighting.h"
 
@@ -417,6 +418,90 @@ void test_okno_krotsze_niz_domyslne_ma_wlasna_pojemnosc() {
     TEST_ASSERT_EQUAL_UINT32(500, standard.capacity());
 }
 
+// ── 4. Rekord przejazdu ─────────────────────────────────────────────────────
+
+void test_pakowanie_jest_odwracalne() {
+    // Format na flashu jest jawny, bajt po bajcie — zrzut struktury wiazalby
+    // go z ukladem pol w pamieci i nastepna zmiana czytalaby smieci.
+    RideNoise value = makeRideNoise(108.35f, 62.0f, 12, 480, 3);
+    uint8_t buffer[RideNoise::kPackedBytes];
+    packRideNoise(value, buffer);
+
+    RideNoise back;
+    unpackRideNoise(buffer, back);
+
+    TEST_ASSERT_EQUAL_INT16(value.maxDb10, back.maxDb10);
+    TEST_ASSERT_EQUAL_UINT16(62, back.atSpeedKmh);
+    TEST_ASSERT_EQUAL_UINT16(12, back.clipped);
+    TEST_ASSERT_EQUAL_UINT16(480, back.dropped);
+    TEST_ASSERT_EQUAL_UINT8(3, back.calibration);
+}
+
+void test_brak_pomiaru_przezywa_zapis() {
+    // Cichy przejazd i przejazd bez mikrofonu to dwie rozne rzeczy. Gdyby brak
+    // pomiaru zapisal sie jako zero, martwy mikrofon udawalby cisze.
+    RideNoise value;
+    uint8_t buffer[RideNoise::kPackedBytes];
+    packRideNoise(value, buffer);
+
+    RideNoise back = makeRideNoise(90.0f, 50.0f, 0, 0, 1);
+    unpackRideNoise(buffer, back);
+
+    TEST_ASSERT_FALSE(back.measured());
+}
+
+void test_poziom_ujemny_przezywa_zapis() {
+    // Poziom moze byc ujemny (cisza ponizej progu kalibracji), a int16
+    // pakowany po bajcie latwo tu zgubic znak.
+    RideNoise value = makeRideNoise(-12.4f, 0.0f, 0, 0, 1);
+    uint8_t buffer[RideNoise::kPackedBytes];
+    packRideNoise(value, buffer);
+
+    RideNoise back;
+    unpackRideNoise(buffer, back);
+
+    TEST_ASSERT_TRUE(back.measured());
+    TEST_ASSERT_EQUAL_INT16(-124, back.maxDb10);
+}
+
+void test_liczniki_sie_nasycaja() {
+    // Przewiniecie licznika pokazaloby male przesterowanie tam, gdzie bylo
+    // ogromne — czyli klamalo w najgorsza strone.
+    const RideNoise value = makeRideNoise(100.0f, 10.0f, 70000, 999999, 1);
+    TEST_ASSERT_EQUAL_UINT16(65535, value.clipped);
+    TEST_ASSERT_EQUAL_UINT16(65535, value.dropped);
+}
+
+void test_rekord_bierze_predkosc_razem_z_poziomem() {
+    // Para (ile, przy jakiej predkosci) ma opisywac JEDNA chwile. Gdyby
+    // predkosc aktualizowala sie osobno, zestawienie jej z predkoscia
+    // maksymalna przejazdu nie mowiloby juz nic o wietrze.
+    RideNoise record = makeRideNoise(95.0f, 60.0f, 0, 0, 1);
+
+    // Cichszy fragment przy innej predkosci nie rusza niczego.
+    record.raiseTo(makeRideNoise(80.0f, 150.0f, 0, 0, 1));
+    TEST_ASSERT_EQUAL_INT16(950, record.maxDb10);
+    TEST_ASSERT_EQUAL_UINT16(60, record.atSpeedKmh);
+
+    // Glosniejszy przepisuje oba naraz.
+    record.raiseTo(makeRideNoise(102.0f, 88.0f, 0, 0, 1));
+    TEST_ASSERT_EQUAL_INT16(1020, record.maxDb10);
+    TEST_ASSERT_EQUAL_UINT16(88, record.atSpeedKmh);
+}
+
+void test_restart_w_trakcie_jazdy_nie_kasuje_rekordu() {
+    // Mikrofon zyje tylko przy wlaczonej stacyjce i po restarcie zaczyna od
+    // zera, ale przejazd trwa dalej. Ta sama zasada, co przy czasie trwania
+    // i sladzie trasy: restart nie kasuje jazdy.
+    RideNoise beforeRestart = makeRideNoise(103.0f, 71.0f, 5, 0, 1);
+
+    // Po restarcie mikrofon nie ma jeszcze nic.
+    beforeRestart.raiseTo(RideNoise{});
+    TEST_ASSERT_EQUAL_INT16(1030, beforeRestart.maxDb10);
+    TEST_ASSERT_EQUAL_UINT16(71, beforeRestart.atSpeedKmh);
+    TEST_ASSERT_EQUAL_UINT16(5, beforeRestart.clipped);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_wazenie_a_trafia_w_norme);
@@ -439,5 +524,11 @@ int main() {
     RUN_TEST(test_zgubione_bloki_sa_liczone);
     RUN_TEST(test_reset_zaczyna_przejazd_od_zera);
     RUN_TEST(test_okno_krotsze_niz_domyslne_ma_wlasna_pojemnosc);
+    RUN_TEST(test_pakowanie_jest_odwracalne);
+    RUN_TEST(test_brak_pomiaru_przezywa_zapis);
+    RUN_TEST(test_poziom_ujemny_przezywa_zapis);
+    RUN_TEST(test_liczniki_sie_nasycaja);
+    RUN_TEST(test_rekord_bierze_predkosc_razem_z_poziomem);
+    RUN_TEST(test_restart_w_trakcie_jazdy_nie_kasuje_rekordu);
     return UNITY_END();
 }
