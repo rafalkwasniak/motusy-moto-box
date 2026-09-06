@@ -42,6 +42,7 @@
 #include "hal/GpsSource.h"
 #include "hal/I2cScan.h"
 #include "hal/ImuSource.h"
+#include "hal/MicSource.h"
 #include "hal/PowerSource.h"
 #include "hal/Store.h"
 #include "net/SetupPortal.h"
@@ -129,6 +130,26 @@ hal::GpsSourceConfig makeGpsConfig() {
 }
 
 hal::GpsSource g_gps{makeGpsConfig()};
+
+hal::MicSourceConfig makeMicConfig() {
+    hal::MicSourceConfig config;
+    config.sampleRateHz = cfg::kNoiseSampleRateHz;
+    config.adcVolume = cfg::kNoiseAdcVolume;
+    return config;
+}
+
+noise::NoiseMeterConfig makeNoiseConfig() {
+    noise::NoiseMeterConfig config;
+    config.sampleRateHz = static_cast<float>(cfg::kNoiseSampleRateHz);
+    config.fastTauS = cfg::kNoiseFastTauS;
+    config.stepMs = cfg::kNoiseStepMs;
+    config.windowSec = cfg::kNoiseWindowSec;
+    config.tolerancePercent = cfg::kNoiseTolerancePercent;
+    config.calibrationDb = cfg::kNoiseCalibrationDb;
+    return config;
+}
+
+hal::MicSource g_mic{makeMicConfig()};
 
 hal::PowerSourceConfig makePowerConfig() {
     hal::PowerSourceConfig config;
@@ -717,6 +738,7 @@ void printConfigHelp(Stream& io) {
     io.println("[konfig] SIEC=<nazwa>  HASLO=<haslo>  TOKEN=<token konta>  STAN  TEST  KASUJ");
     io.println("[gps]    GPS - stan modulu | GPS SUROWE - podglad zdan NMEA");
     io.println("[slad]   SLAD - przelacza zapis | SLADY - lista | SLADY <nr> - zrzut | SLADY X - kasuj");
+    io.println("[halas]  HALAS - stan pomiaru halasu (jedyne okno: nie ma go na ekranie)");
 }
 
 /// Stan modulu GPS jedna linia. Pierwsza rzecz, o ktora sie pyta przy
@@ -762,6 +784,60 @@ void printGpsStatus(Stream& io) {
               source);
 }
 
+/// Stan pomiaru halasu. To NIE jest ozdoba: wartosc nie trafia na ekran, wiec
+/// port USB jest jedynym oknem, przez ktore widac, ze pomiar w ogole zyje.
+/// Martwy mikrofon nie zglasza bledu — oddaje podloge szumu, ktora wyglada
+/// dokladnie jak cicha jazda.
+void printNoiseStatus(Stream& io) {
+    if (!g_mic.isRunning()) {
+        io.println("[halas] mikrofon wylaczony (dziala tylko przy wlaczonej stacyjce)");
+        io.printf("[halas] ustawienia: %lu Hz, okno %.1f s, tolerancja %.0f%%, K %.1f dB, "
+                  "ADC_VOLUME 0x%02X, seria %u\n",
+                  static_cast<unsigned long>(cfg::kNoiseSampleRateHz),
+                  static_cast<double>(cfg::kNoiseWindowSec),
+                  static_cast<double>(cfg::kNoiseTolerancePercent),
+                  static_cast<double>(cfg::kNoiseCalibrationDb),
+                  static_cast<unsigned>(cfg::kNoiseAdcVolume),
+                  static_cast<unsigned>(cfg::kNoiseCalibrationVersion));
+        return;
+    }
+
+    const hal::MicSnapshot snap = g_mic.snapshot();
+
+    io.printf("[halas] %lu Hz, kanal %s, ADC_VOLUME 0x%02X, bloki %lu\n",
+              static_cast<unsigned long>(g_mic.sampleRateHz()),
+              g_mic.usesLeftChannel() ? "lewy" : "prawy",
+              static_cast<unsigned>(g_mic.adcVolume()),
+              static_cast<unsigned long>(g_mic.blocks()));
+
+    // Jesli OBA kanaly leza na podlodze, czytamy pin glosnika zamiast
+    // mikrofonu — dokumentacja M5Stack juz raz nas tak wpuscila w maliny.
+    io.printf("[halas] proba kanalow przy starcie: lewy %.1f / prawy %.1f dBFS\n",
+              static_cast<double>(g_mic.probeLeftDb()),
+              static_cast<double>(g_mic.probeRightDb()));
+
+    io.printf("[halas] chwilowy %.1f dB(A)", static_cast<double>(snap.instantDb));
+    if (snap.ready) {
+        io.printf(" | utrzymany %.1f dB(A)\n", static_cast<double>(snap.currentDb));
+    } else {
+        io.printf(" | utrzymany: okno %.0f s jeszcze niepelne\n",
+                  static_cast<double>(cfg::kNoiseWindowSec));
+    }
+
+    if (snap.maxNoiseDb == noise::NoiseMeter::kNoData) {
+        io.println("[halas] rekord przejazdu: brak (bramka predkosci jeszcze nie dala okna)");
+    } else {
+        io.printf("[halas] rekord przejazdu: %.1f dB(A) przy %.0f km/h\n",
+                  static_cast<double>(snap.maxNoiseDb),
+                  static_cast<double>(snap.maxNoiseSpeedKmh));
+    }
+
+    // Niezerowe przesterowanie znaczy, ze wynik jest ">= X", nigdy "X".
+    io.printf("[halas] przesterowania %lu | zgubione probki %lu\n",
+              static_cast<unsigned long>(snap.clipped),
+              static_cast<unsigned long>(snap.dropped));
+}
+
 /// Stan konfiguracji BEZ sekretow: haslo tylko jako fakt, token zamaskowany.
 /// Wystarczy do odpowiedzi na pytanie "czy to ten token", a wydruk z portu
 /// szeregowego bywa wklejany do zgloszen.
@@ -803,6 +879,11 @@ void handleSerialLine(Stream& io, const char* line) {
 
         if (commandEquals(line, "GPS")) {
             printGpsStatus(io);
+            return;
+        }
+
+        if (commandEquals(line, "HALAS")) {
+            printNoiseStatus(io);
             return;
         }
 
@@ -1267,6 +1348,46 @@ void pumpGps(uint32_t nowMs) {
     }
 }
 
+/// Mikrofon zyje WYLACZNIE w jezdzie — tak samo jak modul GPS (§2.5).
+/// Dwa powody, kazdy wystarczajacy: kodek ES8311 jest wspoldzielony z syrena
+/// alarmu (i nie obsluguje obu naraz), a na parkingu nie ma czego mierzyc.
+///
+/// Kalibracji montazu tu CELOWO nie wymagamy. Inaczej niz przechyl, halas nie
+/// zalezy od ukladu odniesienia urzadzenia — ta sama regula, co przy predkosci
+/// maksymalnej (architektura §3a).
+void pumpMic(uint32_t nowMs) {
+    const bool wantRunning = g_deviceState.state() == state::DeviceState::Riding;
+
+    if (wantRunning && !g_mic.isRunning()) {
+        if (g_mic.begin(makeNoiseConfig())) {
+            Serial.printf("[halas] mikrofon wstal: %lu Hz, kanal %s, ADC_VOLUME 0x%02X\n",
+                          static_cast<unsigned long>(g_mic.sampleRateHz()),
+                          g_mic.usesLeftChannel() ? "lewy" : "prawy",
+                          static_cast<unsigned>(g_mic.adcVolume()));
+            Serial.printf("[halas] proba kanalow: lewy %.1f dBFS, prawy %.1f dBFS\n",
+                          static_cast<double>(g_mic.probeLeftDb()),
+                          static_cast<double>(g_mic.probeRightDb()));
+        } else {
+            // Bez ekranu to jedyny slad, jaki zostawi nieudany start.
+            Serial.println("[halas] mikrofon NIE wstal - pomiar halasu nieaktywny");
+        }
+    } else if (!wantRunning && g_mic.isRunning()) {
+        g_mic.end();
+    }
+
+    if (!g_mic.isRunning()) return;
+
+    // Bramka predkosci steruje wylacznie ZBIERANIEM MAKSIMUM — filtry pracuja
+    // bez przerwy, bo ich zerowanie zafalszowaloby narastanie. Ta sama bramka,
+    // co dla przechylu i przyspieszenia: krecenie gazem na postoju nie jest
+    // przejazdem (§16).
+    g_mic.setRecording(g_speedGate.isRecording(g_orientation.state().stationary,
+                                               !g_gps.isSilent(nowMs), nowMs));
+
+    const motion::SpeedSample speed = g_gps.speed(nowMs);
+    if (speed.valid) g_mic.setSpeedKmh(speed.kmh);
+}
+
 void refreshDisplay() {
     // Ekran wyboru akcji dopiero po chwili trzymania. Przy krotkim nacisnieciu
     // mignalby na ulamek sekundy i tylko przeszkadzal — akcja i tak wykonuje sie
@@ -1400,6 +1521,11 @@ void refreshDisplay() {
 /// wlaczony trzeszczal w czuwaniu, bo light sleep przerywal mu strumien I2S.
 void driveSiren(const guard::AlarmOutput& out) {
     if (out.signalling && !g_audioActive) {
+        // ES8311 nie obsluguje mikrofonu i glosnika naraz. W praktyce te dwa
+        // stany sie nie przecinaja (mikrofon tylko w jezdzie, syrena tylko po
+        // uzbrojeniu), ale kolejnosc musi byc jawna, a nie wynikac ze zbiegu
+        // okolicznosci: alarm ma pierwszenstwo przed pomiarem.
+        if (g_mic.isRunning()) g_mic.end();
         M5.Speaker.begin();
         M5.Speaker.setVolume(cfg::kSpeakerVolume);
         g_audioActive = true;
@@ -1581,6 +1707,9 @@ void setup() {
     auto config = M5.config();
     config.internal_imu = true;
     config.internal_spk = true;
+    // Mikrofon jest wlaczany dopiero na czas jazdy (hal::MicSource), ale
+    // M5.begin() musi znac jego piny, inaczej M5.Mic.isEnabled() jest falszem.
+    config.internal_mic = true;
     config.clear_display = true;
     // Wyjscie 5 V na Grove zasila modul GPS, ale wlacza je hal::GpsSource
     // dopiero na czas jazdy (§2.5) — przy starcie zostaje wylaczone, zeby
@@ -1770,6 +1899,7 @@ void loop() {
 
     pumpImu();
     pumpGps(nowMs);
+    pumpMic(nowMs);
     handleButtons();
 
     g_power.update(nowMs);

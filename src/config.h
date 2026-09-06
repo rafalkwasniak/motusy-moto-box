@@ -138,6 +138,55 @@ constexpr uint32_t kGpsFixMaxAgeMs = 5000;
 constexpr uint8_t kGpsMinSatellites = 4;
 constexpr float kGpsMaxHdop = 5.0f;
 
+// ── Pomiar halasu (docs/pomiar-halasu.md) ──────────────────────────────────
+// Wartosc nie trafia na ekran — idzie wylacznie przez API razem z przejazdem.
+// Cel jest WZGLEDNY: liczba ma byc powtarzalna wobec samej siebie przez sezon,
+// a nie miarodajna bezwzglednie. Urzadzenie siedzi w zadupku motocykla i tego
+// sie nie przeskoczy.
+//
+// PRZELICZNIKI (wazenie A, Fast, 48 kHz) sa wspolne z pierwszym urzadzeniem
+// i NIE sa do strojenia — patrz lib/noise. Strojeniu podlega wylacznie to,
+// co ponizej.
+
+/// 48 kHz. Nizej transformacja biliniowa deformuje charakterystyke na gorze
+/// pasma (0,54 dB @ 8 kHz przy 48 kHz, ale 1,47 dB przy 32 kHz), a motocykl
+/// ma tam sporo energii: ssanie, lancuch, wydech.
+constexpr uint32_t kNoiseSampleRateHz = 48000;
+
+/// Ile halas ma trwac, zeby sie liczyl. Decyzja uzytkownika 2026-09-06:
+/// "na motocyklu 5 s to nie jest dlugo". Parametr, nie stala — gdyby okazalo
+/// sie zlym wyborem, zmiana kosztuje jedna liczbe.
+constexpr float kNoiseWindowSec = 5.0f;
+
+/// Przez jaki procent okna poziom ma byc utrzymany. 100 % (czyste minimum)
+/// odrzuca WLASNE narastanie filtru Fast i nie wykrywa zdarzenia trwajacego
+/// dokladnie 5 s — patrz test_dokladnie_piec_sekund.
+constexpr float kNoiseTolerancePercent = 90.0f;
+
+/// Fast wedlug IEC 61672 i krok histogramu (500 probek na okno 5 s).
+constexpr float kNoiseFastTauS = 0.125f;
+constexpr float kNoiseStepMs = 10.0f;
+
+/// dB(A) = dBFS + K. UWAGA NA ZNAK: zeszlismy ze wzmocnieniem o 12 dB, wiec
+/// to samo zrodlo daje NIZSZY dBFS, a zatem K musi ROSNAC (121,6 + 12).
+/// Odwrocenie tego rozumowania daje liczby zanizone o 24 dB, wygladajace
+/// przy tym calkowicie wiarygodnie.
+///
+/// WARTOSC WYJSCIOWA, nie docelowa — do potwierdzenia na stole (etap N2).
+constexpr float kNoiseCalibrationDb = 133.6f;
+
+/// ES8311 ADC_VOLUME (rejestr 0x17), krok 0,5 dB, 0xBF = 0 dB.
+/// 0xE7 = +20 dB, czyli 12 dB PONIZEJ tego, co ustawia M5Unified pod mowe.
+/// Mikrofon siedzi we wnece blisko wydechu: podlogi nie zalujemy (nic ciszej
+/// niz 60 dB tam nie wystapi), a sufit jest realnie osiagalny.
+constexpr uint8_t kNoiseAdcVolume = 0xE7;
+
+/// Znacznik serii pomiarowej. PODNIESC przy KAZDEJ zmianie wzmocnienia,
+/// przelicznikow albo montazu urzadzenia. Bez tego pierwsza aktualizacja
+/// ruszajaca gain uniewazni sezon PO CICHU — liczby dalej beda wygladac
+/// dobrze. Serwer po tej wartosci odroznia dwie serie od jednej.
+constexpr uint8_t kNoiseCalibrationVersion = 1;
+
 // ── Pamiec nieulotna ───────────────────────────────────────────────────────
 /// Odstep miedzy automatycznymi zapisami wynikow. Zapis przy kazdym nowym
 /// rekordzie zajechalby flash — patrz architektura §6.2.
