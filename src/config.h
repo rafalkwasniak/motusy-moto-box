@@ -167,13 +167,54 @@ constexpr float kNoiseTolerancePercent = 90.0f;
 constexpr float kNoiseFastTauS = 0.125f;
 constexpr float kNoiseStepMs = 10.0f;
 
-/// dB(A) = dBFS + K. UWAGA NA ZNAK: zeszlismy ze wzmocnieniem o 12 dB, wiec
-/// to samo zrodlo daje NIZSZY dBFS, a zatem K musi ROSNAC (121,6 + 12).
-/// Odwrocenie tego rozumowania daje liczby zanizone o 24 dB, wygladajace
-/// przy tym calkowicie wiarygodnie.
+/// dB(A) = dBFS + K.
 ///
-/// WARTOSC WYJSCIOWA, nie docelowa — do potwierdzenia na stole (etap N2).
-constexpr float kNoiseCalibrationDb = 133.6f;
+/// ZMIERZONE 2026-09-06 szumem rozowym wobec GM1351 (tools/szum_rozowy.py,
+/// trzy poziomy, glosniki MacBooka). Pary z JEDNEGO przebiegu — to istotne,
+/// patrz uwaga o powtarzalnosci nizej:
+///
+///     GM1351   urzadzenie   roznica
+///       64       71,4        +7,4
+///       68       75,4        +7,4
+///       72       78,9        +6,9
+///
+/// NACHYLENIE 0,94 — 7,5 dB u nas na 8 dB u wzorca, czyli w granicach
+/// rozdzielczosci GM1351 (pelne decybele). To jest wazniejsze niz samo
+/// przesuniecie: tor jest LINIOWY, nie ma ALC ani kompresji. Gdyby wyszlo
+/// 1,36 jak kiedys na Raspberry Pi, byloby to diagnostyka sprzetu, a NIE
+/// liczba do dopasowania.
+///
+/// Punkt wyjscia 133,6 (121,6 z DBMeterV1 plus 12 dB zejscia ze wzmocnieniem)
+/// zawyzal o 7,2 dB. Stad 133,6 - 7,2:
+constexpr float kNoiseCalibrationDb = 126.4f;
+
+/// ⚠️ DWIE RZECZY, KTORE TE LICZBE OGRANICZAJA.
+///
+/// ZAKRES. Kalibrowalismy na 64-72 dB(A), a mierzyc bedziemy 90-110.
+/// Ekstrapolacja poza zakres kalibracji jest zgadywaniem — przy dostepie do
+/// glosnika zdolnego wyjsc na 95-100 dB trzeba to powtorzyc.
+///
+/// POWTARZALNOSC STANOWISKA. Dwa przebiegi tego samego szumu, tej samej
+/// glosnosci, w odstepie kilku minut daly na GM1351 67/71/75 i 64/68/72 —
+/// czyli 3 dB rozjazdu z samego ustawienia przyrzadow. Niepewnosc tej stalej
+/// jest wiec rzedu +/-3 dB, nie +/-0,5.
+///
+/// Dla celu, ktory sobie postawilismy, to NIE JEST problem: metryka ma byc
+/// powtarzalna wobec samej siebie przez sezon, a stala przesuwa cala skale
+/// o tyle samo w kazdym przejezdzie i w porownaniach sie skraca.
+
+/// PODLOGA SZUMU WLASNEGO: ok. 51 dB(A) przy tych ustawieniach (zmierzone
+/// 2026-09-06 — GM1351 pokazywal w pokoju 32 dB, my nieruchome 51,2).
+///
+/// To NIE jest blad kalibracji, tylko szum wlasny toru, i sprawdza sie to
+/// trzema drogami: odczyt jest nieruchomy (szum pokoju by falowal), surowe
+/// probki daja -73,1 dBFS wobec -75,2 dBFS po wazeniu A (ten sam szum dwiema
+/// drogami), a przy 64 dB taka podloga dokladalaby 0,2 dB — czyli nie tlumaczy
+/// przesuniecia +7,2.
+///
+/// Podloge oddalismy SWIADOMIE w zamian za zapas na gorze (zejscie o 12 dB
+/// na ADC_VOLUME). W motocyklu nic ciszej niz 60 dB nie wystapi, wiec kosztu
+/// nie poniesiemy — a sufit 126 dB(A) jest przy wydechu realnie potrzebny.
 
 /// ES8311 ADC_VOLUME (rejestr 0x17), krok 0,5 dB, 0xBF = 0 dB.
 /// 0xE7 = +20 dB, czyli 12 dB PONIZEJ tego, co ustawia M5Unified pod mowe.

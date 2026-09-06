@@ -253,9 +253,55 @@ Piszę to tak dosłownie, bo **odwrócenie znaku dałoby liczby zaniżone o 24 d
 wyglądające przy tym całkowicie wiarygodnie**. [noice.md §8](noice.md) opisuje
 dokładnie taki wypadek — zła wartość `K` w bazie przesunęłaby pomiary o 32 dB.
 
-**PGA zostaje na 6 dB.** Wzmocnienie analogowe przed przetwornikiem jest jedynym,
-które realnie poprawia stosunek sygnału do szumu, a przy 6 dB nasycenia nie ma.
-Ścinamy wyłącznie cyfrowe.
+**PGA zostaje na minimum.** M5Unified ustawia `0x14 = 0x10`, czyli PGA już jest
+najniżej — cały zapas analogowy mamy z urzędu. Ścinamy wyłącznie cyfrowe.
+
+### 8.1. Wynik kalibracji (2026-09-06)
+
+Szum różowy z `tools/szum_rozowy.py`, trzy poziomy, wzorzec GM1351:
+
+| GM1351 | urządzenie | różnica |
+|---|---|---|
+| 64 | 71,4 | +7,4 |
+| 68 | 75,4 | +7,4 |
+| 72 | 78,9 | +6,9 |
+
+**Nachylenie 0,94** — 7,5 dB u nas na 8 dB u wzorca, czyli w granicach
+rozdzielczości GM1351 (pełne decybele). To jest ważniejsze niż przesunięcie:
+**tor jest liniowy, nie ma ALC ani kompresji.** Rejestr `0x18 = 0x00` zrobił
+swoje. Gdyby wyszło 1,36 jak kiedyś na Raspberry Pi, byłaby to diagnostyka
+sprzętu, a nie liczba do dopasowania.
+
+Punkt wyjścia 133,6 zawyżał o 7,2 dB, stąd **`K = 126,4`**. Potwierdzone po
+wgraniu: tło czytane wcześniej jako 58,4 spadło dokładnie na 51,2.
+
+**Dwa ograniczenia, które trzeba znać:**
+
+- **Zakres.** Kalibracja objęła 64–72 dB(A), a mierzyć będziemy 90–110.
+  Ekstrapolacja poza zakres to zgadywanie — przy dostępie do głośnika
+  wychodzącego na 95–100 dB trzeba to powtórzyć.
+- **Powtarzalność stanowiska.** Dwa przebiegi tego samego szumu, tej samej
+  głośności, w odstępie kilku minut dały na GM1351 67/71/75 i 64/68/72 — czyli
+  **3 dB rozjazdu z samego ustawienia przyrządów**. Niepewność stałej jest więc
+  rzędu ±3 dB, nie ±0,5.
+
+Dla metryki **względnej** żadne z tych dwóch nie jest problemem: stała przesuwa
+całą skalę o tyle samo w każdym przejeździe i w porównaniach się skraca.
+
+### 8.2. Podłoga szumu własnego: ~51 dB(A)
+
+GM1351 pokazywał w cichym pokoju **32 dB**, a urządzenie nieruchome **51,2**.
+To nie jest błąd kalibracji, tylko szum własny toru — sprawdzone trzema drogami:
+
+1. Odczyt jest **nieruchomy**; prawdziwy szum pokoju by falował.
+2. Surowe próbki dają **−73,1 dBFS**, poziom po ważeniu A to **−75,2 dBFS**.
+   Ten sam szum widziany dwiema niezależnymi drogami.
+3. Przy 64 dB taka podłoga dokładałaby **0,2 dB** — czyli nie tłumaczy
+   przesunięcia +7,2, które zmierzyliśmy.
+
+Podłogę oddaliśmy **świadomie** w zamian za zapas na górze. W motocyklu nic
+ciszej niż 60 dB nie wystąpi, więc kosztu nie poniesiemy — a sufit 126,4 dB(A)
+jest przy wydechu z bliska realnie potrzebny.
 
 ---
 
