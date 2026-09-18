@@ -16,6 +16,22 @@ namespace {
 constexpr uint32_t kBauds[] = {115200, 9600, 38400, 57600, 19200, 4800};
 constexpr uint8_t kProbeCount = static_cast<uint8_t>(sizeof(kBauds) / sizeof(kBauds[0]) * 2);
 
+/// Bufor odbiorczy UART-u. DOMYSLNE 256 BAJTOW TO ZA MALO i kosztowalo nas
+/// okolo 3 % zdan (zmierzone 2026-09-18: 204 odrzucone w osmiominutowym
+/// tescie, przy wylaczonym podgladzie surowych zdan — echo bylo tylko
+/// dodatkiem, nie przyczyna).
+///
+/// Arytmetyka jest prosta: modul wielosystemowy nadaje raz na sekunde okolo
+/// siedemnastu zdan, czyli ~900 bajtow, ktore przy 115200 baud wpadaja
+/// w ~80 ms. Kazde dluzsze zajecie petli — odswiezenie ekranu co 100 ms,
+/// zapis sladu na LittleFS, autozapis wynikow — wypycha nadmiar poza bufor,
+/// a urwany srodek zdania przepada na sumie kontrolnej.
+///
+/// 2 kB to okolo dwoch sekund zapasu przy koszcie nieistotnym wobec 191 kB
+/// wolnego RAM-u. Straty w zdaniach RMC to dziury w sladzie GPX, wiec zapas
+/// jest tu tanszy niz oszczednosc.
+constexpr size_t kRxBufferBytes = 2048;
+
 }  // namespace
 
 void GpsSource::begin(uint32_t nowMs) {
@@ -163,6 +179,10 @@ void GpsSource::applyProbe(uint32_t nowMs) {
     baud_ = kBauds[probeIndex_ / 2];
 
     if (started_) serial_.end();
+    // MUSI BYC PRZED begin(): sterownik alokuje bufor przy otwarciu portu
+    // i odrzuca zmiane rozmiaru na dzialajacym UART-cie. Po `end()` port jest
+    // zamkniety, wiec kazde kolejne podejscie proby tez ustawia go poprawnie.
+    serial_.setRxBufferSize(kRxBufferBytes);
     serial_.begin(baud_, SERIAL_8N1, rxPin_, txPin);
     started_ = true;
 
