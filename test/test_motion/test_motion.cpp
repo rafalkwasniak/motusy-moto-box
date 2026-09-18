@@ -581,16 +581,27 @@ void test_gate_reopens_after_stop() {
     TEST_ASSERT_TRUE(gate.isRecording(false, true, 6000));
 }
 
-/// Utrata fixu nie moze oznaczac "nie rejestruje nic" — awaria modulu ma
+/// Utrata fixu nie moze oznaczac "nie rejestruje nic" — AWARIA MODULU ma
 /// cofnac urzadzenie do stanu sprzed GPS, a nie wylaczyc pomiary.
+///
+/// TEN TEST SPRAWDZAL WCZESNIEJ COS INNEGO, NIZ MOWI JEGO NAGLOWEK: przekazywal
+/// `gpsResponding = true`, czyli modul ZYWY, i utrwalal dziure zgloszona
+/// 2026-09-18 — fix zlapany na postoju, potem utracony, przepuszczal regule
+/// sprzed GPS-a bezterminowo. Zywy modul bez fixu ma teraz wlasny test
+/// (test_gate_closes_when_fix_lost_while_standing); tutaj zostaje to, o czym
+/// naglowek mowil od poczatku, czyli modul, ktorego nie ma.
 void test_gate_falls_back_to_imu_without_fix() {
     SpeedGate gate;
     gate.updateSpeed(0.0f, 1000);
     TEST_ASSERT_FALSE(gate.isRecording(false, true, 1000));
 
-    // Po czasie podtrzymania decyduje bezruch z IMU, a nie ostatnia predkosc.
-    TEST_ASSERT_TRUE(gate.isRecording(false, true, 1000 + 15001));
-    TEST_ASSERT_FALSE(gate.isRecording(true, true, 1000 + 15001));
+    // Modul zamilkl — po czasie podtrzymania decyduje bezruch z IMU.
+    TEST_ASSERT_TRUE(gate.isRecording(false, false, 1000 + 15001));
+    TEST_ASSERT_FALSE(gate.isRecording(true, false, 1000 + 15001));
+
+    // Ten sam moment, ale modul ZYJE: bramka zostaje zamknieta, bo w chwili
+    // utraty fixu motocykl stal.
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 1000 + 15001));
 }
 
 /// PRZED PIERWSZYM FIXEM BRAMKA JEST ZAMKNIETA. Zimny start GPS-a trwa
@@ -628,6 +639,27 @@ void test_gate_degrades_only_after_first_fix() {
     // decyduje teraz bezruch z IMU.
     TEST_ASSERT_TRUE(gate.isRecording(false, true, 1000 + 15001));
     TEST_ASSERT_FALSE(gate.isRecording(true, true, 1000 + 15001));
+}
+
+/// ...ALE "fix byl kiedys" to nie to samo, co "jechalem, gdy go tracilem".
+///
+/// Scenariusz zgloszony 2026-09-18: urzadzenie zlapalo pozycje w otwartych
+/// drzwiach balkonowych, po czym wrocilo pod dach, gdzie fix juz nie wrocil.
+/// Warunek pilnujacy samego `haveSpeed_` przepuszczal wtedy regule sprzed
+/// GPS-a bezterminowo — kazde poruszenie reka ustanawialo rekord przechylu,
+/// czyli dokladnie to, co poprawka z 2026-09-04 miala zlikwidowac.
+void test_gate_closes_when_fix_lost_while_standing() {
+    SpeedGate gate;
+
+    // Fix BYL, ale urzadzenie stalo: same szumy GPS ponizej progu wyjscia.
+    gate.updateSpeed(1.6f, 1000);
+    gate.updateSpeed(0.7f, 2000);
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 5000));
+
+    // Fix przepadl na dobre. Machanie reka nie moze ustanawiac rekordow,
+    // mimo ze `haveSpeed_` zostalo z balkonu.
+    TEST_ASSERT_FALSE(gate.isRecording(false, true, 2000 + 15001));
+    TEST_ASSERT_FALSE(gate.isRecording(true, true, 2000 + 15001));
 }
 
 void test_gate_survives_millis_overflow() {
@@ -777,6 +809,7 @@ int main(int, char**) {
     RUN_TEST(test_gate_waits_for_first_fix_when_module_alive);
     RUN_TEST(test_gate_falls_back_when_module_absent);
     RUN_TEST(test_gate_degrades_only_after_first_fix);
+    RUN_TEST(test_gate_closes_when_fix_lost_while_standing);
     RUN_TEST(test_gate_survives_millis_overflow);
     RUN_TEST(test_history_keeps_recorded_at);
 

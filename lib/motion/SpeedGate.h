@@ -32,6 +32,20 @@
 //      bo ta klasa nie wie nic o sprzecie. Awaria modulu nadal cofa urzadzenie
 //      do stanu sprzed GPS, a nie wylacza pomiarow.
 //
+//      TA SAMA DZIURA WROCILA INNYM WEJSCIEM (2026-09-18, znowu znaleziona
+//      przez uzytkownika). Warunek pilnowal tylko tego, czy fix BYL KIEDYS
+//      w przejezdzie — a to nie mowi nic o tym, czy motocykl jechal w chwili
+//      jego utraty. Po zlapaniu pozycji na dworze i powrocie pod dach fix nie
+//      wracal, wiec urzadzenie osuwalo sie w tryb zapasowy na stale i kazde
+//      poruszenie reka znowu ustanawialo rekord.
+//
+//      Stad trzeci warunek: po utracie fixu kontynuujemy na IMU tylko wtedy,
+//      gdy bramka byla wowczas OTWARTA. Cena jest znana i przyjeta swiadomie —
+//      postoj BEZ fixu (parking podziemny, zadaszenie), po ktorym ruszamy,
+//      zostawia bramke zamknieta az do powrotu pozycji. Przy zywym module bez
+//      fixu nie da sie odroznic ruszania od machania reka, a wybor jest miedzy
+//      zgubieniem danych a ich zmysleniem.
+//
 // Czyste C++ bez zaleznosci od sprzetu.
 
 #pragma once
