@@ -143,6 +143,15 @@ hal::GpsSourceConfig makeGpsConfig() {
 
 hal::GpsSource g_gps{makeGpsConfig()};
 
+/// Chwila zakonczenia ostatniego przejazdu — od niej liczymy podtrzymanie
+/// zasilania modulu GPS (`cfg::kGpsWarmHoldMs`).
+uint32_t g_gpsHoldSinceMs = 0;
+/// Czy podtrzymanie w ogole trwa. Odroznia "przejazd wlasnie sie skonczyl" od
+/// "urzadzenie wstalo na baterii", gdzie nie ma czego podtrzymywac: bez tej
+/// flagi swieze zero w `g_gpsHoldSinceMs` wygladaloby jak przejazd sprzed
+/// chwili i modul dostawalby godzine pradu po kazdym starcie z baterii.
+bool g_gpsHoldActive = false;
+
 hal::MicSourceConfig makeMicConfig() {
     hal::MicSourceConfig config;
     config.sampleRateHz = cfg::kNoiseSampleRateHz;
@@ -782,8 +791,13 @@ void printConfigHelp(Stream& io) {
 /// "predkosc pokazuje kreski".
 void printGpsStatus(Stream& io) {
     const uint32_t nowMs = millis();
+    // Podtrzymanie po jezdzie widac wprost, bo inaczej "wl" poza jazda
+    // wygladaloby na usterke sterowania zasilaniem.
+    const char* powerState = g_gps.isPowered()
+                                 ? (g_gpsHoldActive ? "wl (podtrzymanie po jezdzie)" : "wl")
+                                 : "wyl (poza jazda)";
     io.printf("[gps] zasilanie: %s | port: %lu baud RX=G%d | zdania: %lu ok / %lu odrzucone\n",
-              g_gps.isPowered() ? "wl" : "wyl (poza jazda)",
+              powerState,
               static_cast<unsigned long>(g_gps.baud()), g_gps.rxPin(),
               static_cast<unsigned long>(g_gps.validSentences()),
               static_cast<unsigned long>(g_gps.rejectedSentences()));
@@ -1329,11 +1343,38 @@ void feedTrack(uint32_t nowMs) {
 /// Odczyt modulu GPS. Wolany w kazdej iteracji petli — zdania przychodza raz
 /// na sekunde, ale bufor UART-u ma 256 bajtow, a jedna sekunda ruchu przy
 /// 9600 baud to ~600 bajtow. Rzadsze zagladanie gubiloby zdania.
+/// Czy trwa jeszcze podtrzymanie zasilania GPS po zakonczonym przejezdzie.
+///
+/// Wygasa na dwa sposoby i OBA gasza flage, zeby nie liczyc tego w kolko przy
+/// kazdym obiegu petli: po uplywie okna albo gdy bateria spadnie ponizej progu.
+/// Ten drugi warunek jest sprawdzany na biezaco, a nie raz na starcie —
+/// godzina to dosc czasu, zeby zapas zdazyl stopniec.
+bool gpsWarmHoldActive(uint32_t nowMs) {
+    if (!g_gpsHoldActive) return false;
+
+    if (nowMs - g_gpsHoldSinceMs >= cfg::kGpsWarmHoldMs) {
+        g_gpsHoldActive = false;
+        Serial.println("[gps] podtrzymanie po jezdzie wygaslo - odcinam zasilanie modulu");
+        return false;
+    }
+
+    if (M5.Power.getBatteryLevel() < cfg::kGpsWarmHoldMinBatteryPercent) {
+        g_gpsHoldActive = false;
+        Serial.println("[gps] niski stan baterii - przerywam podtrzymanie, alarm ma dowiezc noc");
+        return false;
+    }
+
+    return true;
+}
+
 void pumpGps(uint32_t nowMs) {
-    // Zasilanie modulu tylko przy wlaczonej stacyjce (§2.5): 32 mA w czuwaniu
-    // zabiloby baterie przed rankiem, a stojacy motocykl nie ma predkosci,
-    // ktora warto by mierzyc.
-    g_gps.setPower(g_deviceState.state() == state::DeviceState::Riding, nowMs);
+    // Zasilanie modulu przy wlaczonej stacyjce (§2.5) ORAZ przez godzine po
+    // jezdze. Samo 32 mA w czuwaniu zabiloby baterie przed rankiem, ale
+    // odciecie NATYCHMIAST po jezdzie kasuje modulowi efemerydy i kazdy
+    // postoj — nawet piesciominutowy na paliwo — kosztuje potem pelny zimny
+    // start (50-175 s, zmierzone). Podtrzymanie kupuje goracy start za 32 mAh.
+    const bool riding = g_deviceState.state() == state::DeviceState::Riding;
+    g_gps.setPower(riding || gpsWarmHoldActive(nowMs), nowMs);
 
     // Nowa probka pojawia sie dopiero wraz ze zdaniem RMC — to ono niesie
     // status fixa i predkosc.
@@ -1906,6 +1947,11 @@ void handleStateEvent(state::DeviceEvent event) {
             g_rideClock.reset();
             resetRideNoise();
             g_speedGate.reset();
+            // Jazda rusza — podtrzymanie nie ma juz czego pilnowac, bo napiecie
+            // trzyma teraz sama stacyjka. Zostawione na `true` przeszloby przez
+            // caly przejazd i odcieloby modul w jego trakcie, godzine po
+            // POPRZEDNIM postoju.
+            g_gpsHoldActive = false;
             if (g_trackEnabled) startTrack();
             g_rideArchived = false;
 #if MMB_RAW_LOGGER
@@ -1923,6 +1969,10 @@ void handleStateEvent(state::DeviceEvent event) {
             // z zanikajacym napieciem.
             saveResultsIfDirty(true);
             archiveCurrentRide();
+            // Modul GPS zostaje pod napieciem jeszcze przez godzine, zeby
+            // krotki postoj wrocil goracym startem zamiast zimnego (§2.5).
+            g_gpsHoldSinceMs = millis();
+            g_gpsHoldActive = true;
 #if MMB_RAW_LOGGER
             g_logger.stopSession();
 #endif

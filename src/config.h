@@ -138,6 +138,27 @@ constexpr uint32_t kGpsFixMaxAgeMs = 5000;
 constexpr uint8_t kGpsMinSatellites = 4;
 constexpr float kGpsMaxHdop = 5.0f;
 
+/// PODTRZYMANIE ZASILANIA PO JEZDZIE. Modul nie ma wlasnego podtrzymania, wiec
+/// odciecie napiecia kasuje mu efemerydy i KAZDA jazda zaczyna sie zimnym
+/// startem — zmierzone 2026-09-18: 50 s przy dobrym niebie, 175 s w drzwiach
+/// balkonowych. Przez ten czas nie ma ani predkosci, ani sladu.
+///
+/// Efemerydy sa wazne 2-4 h, wiec kazdy postoj krotszy od tego okna wraca
+/// goracym startem (~1 s) zamiast zimnym. Godzina pokrywa paliwo, kawe,
+/// zakupy i postoj u kolegi.
+///
+/// RACHUNEK (decyzja uzytkownika 2026-09-18): 32 mA przez godzine to 32 mAh,
+/// czyli 12,8 % baterii 250 mAh. Koszt ponosimy RAZ na postoj, nie co jazde,
+/// a alarmowi zostaje blisko 90 % na noc.
+///
+/// Czego to NIE naprawia: pierwszej jazdy dnia. Po nocy zimny start bedzie
+/// zawsze i bez podtrzymania w samym module nie da sie tego obejsc.
+constexpr uint32_t kGpsWarmHoldMs = 60UL * 60UL * 1000UL;
+
+/// Ponizej tego stanu baterii podtrzymanie odpada. Alarm ma dowiezc noc —
+/// szybszy fix nastepnego dnia nie jest tego wart, gdy zapasu juz brakuje.
+constexpr uint8_t kGpsWarmHoldMinBatteryPercent = 30;
+
 // ── Pomiar halasu (docs/pomiar-halasu.md) ──────────────────────────────────
 // Wartosc nie trafia na ekran — idzie wylacznie przez API razem z przejazdem.
 // Cel jest WZGLEDNY: liczba ma byc powtarzalna wobec samej siebie przez sezon,
