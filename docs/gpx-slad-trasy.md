@@ -266,8 +266,8 @@ dowieźć.
 ## 6. Zachowanie urządzenia
 
 **Bramkowanie fixu.** Punkt startu to pierwszy fix 3D z sensownym HDOP, a nie
-pierwszy jaki przyjdzie. Zimny start trwa 30–60 s; bez bramki każdy ślad zaczyna
-się skokiem o 200 m.
+pierwszy jaki przyjdzie. Zimny start trwa 50–175 s (zmierzone na module
+z anteną ceramiczną); bez bramki każdy ślad zaczyna się skokiem o 200 m.
 
 **Przerwa to segment, nie tylko duże `dt`.** Utrata fixu (tunel, wiadukt, garaż)
 i postój — bo stanie w miejscu nie ma po co zapisywać 720 identycznych punktów na

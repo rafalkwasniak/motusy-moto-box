@@ -168,48 +168,139 @@ Filtr ma tę korekcję **zaimplementowaną od początku** (`Orientation::setSpee
 Bez źródła prędkości pozostaje po prostu nieaktywna — dołożenie GPS to podanie
 prędkości do gotowego wejścia, bez zmian w algorytmie.
 
-### 2.5. Moduł GPS — M5Stack Unit GPS/BDS (AT6668)
+### 2.5. Moduł GPS — M5Stack Unit GPS/BDS v1.1 (AT6668)
 
 | Parametr | Wartość | Znaczenie dla projektu |
 |---|---|---|
 | Chipset | AT6668 + MAX2659 | GPS, BDS, GLONASS, GALILEO, QZSS |
-| Interfejs | UART, NMEA 0183 4.1 | Grove Port A — **RX = G10, 115200 baud** (zmierzone) |
-| Odświeżanie | 1–10 Hz | prędkość wolniejsza niż IMU (100 Hz) — stąd korekcja, nie zastąpienie |
+| Antena | **wbudowana ceramiczna** | kierunkowa i słaba — płytka musi widzieć niebo, patrz niżej |
+| Interfejs | UART, NMEA 0183 4.1 | Grove Port A — **RX = G10, 115200 baud** (fabryczne, potwierdzone pomiarem) |
+| Odświeżanie | 1 Hz | prędkość wolniejsza niż IMU (100 Hz) — stąd korekcja, nie zastąpienie |
 | Dokładność pozycji | 1,5 m | prędkość dopplerowska jest dokładniejsza niż z różniczkowania pozycji |
 | Pobór | ~32 mA @5 V | **tylko w trybie jazdy**; w trybie alarmowym musi być odcięty |
-| Zimny start | 28 s | ekran startowy 5 s nie wystarczy — filtr musi działać bez fixa |
+| Zimny start | katalog 23 s, **zmierzone 50–175 s** | patrz „Zimny start przy każdej jeździe" |
 | Wymiary | 48 × 24 × 8 mm | dokładnie footprint Sticka |
 
 Wymagania wynikające z powyższego:
 
-- **Degradacja bez fixa jest obowiązkowa.** Tunel, garaż, pierwsze 30 s po starcie —
-  urządzenie działa dalej na samym żyroskopie, tylko z gorszą korekcją dryftu.
-  `speedHintMaxAgeMs` pilnuje, żeby stary odczyt nie był używany jako świeży.
+- **Degradacja bez fixa jest obowiązkowa.** Tunel, garaż, pierwsze **minuty** po
+  starcie (zmierzone 50–175 s, nie 30) — urządzenie działa dalej na samym
+  żyroskopie, tylko z gorszą korekcją dryftu. `speedHintMaxAgeMs` pilnuje, żeby
+  stary odczyt nie był używany jako świeży.
 - **Zasilanie GPS musi być odcinane** przed wejściem w deep sleep, inaczej 32 mA
   zabije baterię w ~8 godzin i alarm nie doczeka rana.
 - Port A zajęty — kolejne moduły tylko przez Hat2-Bus.
 
-#### Wynik pierwszego uruchomienia z modułem (2026-09-03)
+#### Dobieranie ustawień portu
 
-Egzemplarz z anteną zewnętrzną (SMA). Dwie rzeczy wyszły **inaczej, niż podaje
-dokumentacja**, i obie kosztowałyby godzinę zgadywania, gdyby nie mierzyć:
+Pin odbiorczy to **G10** (linia SCL Grove), a prędkość transmisji **115200** —
+fabryczne ustawienie v1.1, potwierdzone pomiarem. Mimo to `hal::GpsSource` nie
+zakłada ustawień, tylko je **dobiera**: przechodzi po kolei sześć prędkości
+transmisji razy dwie kolejności pinów i zostaje przy tej kombinacji, na której
+przyszło zdanie z poprawną sumą kontrolną. Lista zaczyna się od 115200, więc
+w praktyce blokuje się na pierwszej próbie — reszta jest siatką bezpieczeństwa
+na moduł przestawiony komendą albo inną rewizję płytki.
 
-| | dokumentacja | sprzęt |
-|---|---|---|
-| prędkość transmisji | 9600 | **115200** |
-| pin odbiorczy | — | **G10** (linia SCL Grove) |
-
-Stąd `hal::GpsSource` nie zakłada ustawień, tylko je **dobiera**: przechodzi po
-kolei sześć prędkości transmisji razy dwie kolejności pinów i zostaje przy tej
-kombinacji, na której przyszło zdanie z poprawną sumą kontrolną. Lista zaczyna
-się od zmierzonych 115200, więc w praktyce blokuje się na pierwszej próbie —
-reszta jest siatką bezpieczeństwa na inny egzemplarz albo moduł przestawiony
-komendą. Nieudana próba raportuje na port USB liczbę odebranych bajtów, bo to
-ona rozróżnia dwie zupełnie różne awarie: *bajty bez zdań* = zła prędkość
+Nieudana próba raportuje na port USB liczbę odebranych bajtów, bo to ona
+rozróżnia dwie zupełnie różne awarie: *bajty bez zdań* = zła prędkość
 transmisji, *zero bajtów* = zły pin, brak zasilania albo odłączony kabel.
 
-Moduł łapie fix **wewnątrz budynku**: 14 satelitów, HDOP 1,6, `ANTENNA OK`
-w `$GPTXT`. Nadaje 1 Hz, komplet GNSS (GPS, GLONASS, BeiDou, Galileo, QZSS).
+**Bufor odbiorczy UART-u musi być powiększony.** Domyślne 256 bajtów Arduino
+to za mało: komplet zdań wielosystemowych to ~900 bajtów wpadających w ~80 ms,
+a każde dłuższe zajęcie pętli (odświeżenie ekranu, zapis na LittleFS) wypycha
+nadmiar poza bufor. Zmierzone straty przy domyślnym buforze: **~3 % zdań**
+(204 odrzucone w ośmiominutowym teście). Stąd `setRxBufferSize(2048)` przed
+`begin()` — straty w zdaniach RMC to dziury w śladzie GPX.
+
+#### Antena ceramiczna — konsekwencje (2026-09-18)
+
+Wariant v1.1 ma antenę **wbudowaną, ceramiczną i pasywną**. To zmienia trzy
+rzeczy wobec modułów z anteną zewnętrzną:
+
+- **`ANTENNA OPEN` w `$GPTXT` jest normalne i nic nie znaczy.** Detektor mierzy
+  prąd stały pobierany przez *aktywną* antenę zewnętrzną; patch ceramiczny jest
+  pasywny i nie pobiera prądu, więc ten komunikat pojawia się zawsze, także przy
+  module w pełni sprawnym. **Nie jest to objaw usterki** — kosztowało to jedną
+  błędną diagnozę, zanim się wyjaśniło.
+- **Antena jest kierunkowa.** Promieniuje prostopadle do płytki, więc moduł
+  leżący bokiem albo spodem do nieba traci większość sygnału. Ma to bezpośredni
+  wpływ na montaż na motocyklu: pod owiewką albo w kufrze fix może nie przyjść
+  wcale.
+- **Widok nieba decyduje o wszystkim.** Zmierzone tego samego dnia, tym samym
+  egzemplarzem:
+
+| warunki | wynik |
+|---|---|
+| za częściowo zasłoniętym oknem | fix po 50 s, potem osypywanie: HDOP 2,3 → 14,5 i utrata fixa po 5 min |
+| w otwartych drzwiach balkonowych | fix po 175 s, **stabilny 5+ min**: HDOP 2,0–2,7, 8–10 satelitów |
+
+Próg `kGpsMaxHdop = 5.0` przy uczciwym widoku nieba ma dwukrotny zapas
+(HDOP ~2,5) i **nie wymaga poluzowania** — to nie on ucina dane, tylko antena.
+
+#### Zimny start i podtrzymanie zasilania po jeździe
+
+Moduł nie ma własnego podtrzymania, więc odcięcie napięcia kasuje mu efemerydy.
+Bez przeciwdziałania **każda jazda zaczynałaby się pełnym zimnym startem** —
+zmierzone 50–175 s, wobec 23 s z katalogu. Przez ten czas nie ma ani prędkości,
+ani śladu.
+
+**Rozstrzygnięte 2026-09-18: zasilanie odcinamy z godzinnym opóźnieniem**
+(`cfg::kGpsWarmHoldMs`). Efemerydy są ważne 2–4 h, więc każdy postój krótszy od
+tego okna wraca **gorącym startem (~1 s)** zamiast zimnym — paliwo, kawa,
+zakupy, postój u kolegi.
+
+| | wartość |
+|---|---|
+| Pobór modułu | 32 mA |
+| Godzina podtrzymania | 32 mAh |
+| Udział baterii 250 mAh | **12,8 %** |
+| Zysk | ~1 s zamiast 50–175 s |
+
+Koszt ponosimy **raz na postój, nie co jazdę**, a alarmowi zostaje blisko 90 %
+zapasu na noc. Zabezpieczenie: poniżej `kGpsWarmHoldMinBatteryPercent` (30 %)
+podtrzymanie jest przerywane w trakcie — godzina to dość czasu, żeby zapas
+zdążył stopnieć, a alarm ma pierwszeństwo.
+
+**Czego to nie naprawia:** pierwszej jazdy dnia. Po nocy zimny start będzie
+zawsze i bez podtrzymania w samym module nie da się tego obejść. W praktyce
+pierwsze minuty to wyjazd z garażu i osiedle poniżej progu 5 km/h, więc strata
+jest mniejsza, niż wynika z samej liczby sekund.
+
+Stan podtrzymania widać w diagnostyce `GPS` jako `zasilanie: wl (podtrzymanie
+po jeździe)` — bez tego „wl" poza jazdą wyglądałoby na usterkę sterowania.
+
+#### Diagnostyka na porcie USB
+
+Dwie komendy odpowiadają na wszystkie pytania przy „prędkość pokazuje kreski":
+
+- **`GPS`** — stan jedną linią: czy moduł odpowiada, na jakim porcie, liczba
+  satelitów, HDOP, ostatnia prędkość, licznik zdań przyjętych i odrzuconych.
+- **`GPS SUROWE`** — podgląd surowych zdań NMEA. Uwaga: podgląd sam dociąża
+  pętlę i podnosi odsetek gubionych zdań, więc do dłuższych pomiarów lepiej
+  odpytywać `GPS` co kilkanaście sekund.
+
+Czytanie surowych zdań: `$xxGSV` niosą liczbę satelitów w zasięgu i SNR
+(30+ dBHz = mocny sygnał), `$xxGSA` tryb rozwiązania (1 = brak fixa, 3 = 3D)
+i HDOP, `$xxRMC` status `A`/`V` oraz prędkość. **Zero satelitów we wszystkich
+konstelacjach naraz** to brak sygnału, nie słaby odbiór — indoor zwykle pokazuje
+kilka pozycji ze słabym SNR.
+
+#### Fałszywa prędkość przy nieruchomym urządzeniu (2026-09-18)
+
+Urządzenie leżące nieruchomo, przy dobrym fiksie (3D, HDOP 2,5, 9 satelitów),
+podało pojedynczą próbkę **22,5 km/h**, która ustawiła rekord sesji. Sąsiednie
+próbki (1,6 / 4,9 / 2,6 km/h) odsiał próg `minSpeedKmh = 5.0`, ta jedna przeszła.
+
+Bramka jakości nie miała jak tego odrzucić, bo **dane były dobre** — fałszywa
+była sama prędkość, nie fix. Jedynym źródłem zdolnym to rozstrzygnąć jest IMU,
+które w tej samej chwili wiedziało, że nic się nie rusza. Stąd rekord prędkości
+podnosi się wyłącznie przy `!stationary`.
+
+Weto jest bezpieczne w drugą stronę: `stationary` wymaga ciszy na akcelerometrze
+(0,05 g) i żyroskopie (1,5°/s) utrzymanej przez pół sekundy, a tego na jadącym
+motocyklu nie ma nawet na gładkim asfalcie — sama praca silnika to wyklucza.
+Śladu weto nie dotyczy: tam fałszywy punkt odsiewa decymator, a przy postoju
+zapis pozycji jest pożądany.
 
 #### GPS jako jedyny zegar urządzenia
 
@@ -904,7 +995,7 @@ wyłączać pomiary.
 
 **Ale degradacja dotyczy WYŁĄCZNIE utraty fixu, nie jego braku od początku.**
 Pierwsza wersja stosowała ją od startu przejazdu i był to błąd (znaleziony
-przez użytkownika 2026-09-04). Zimny start GPS-a trwa 30–60 s i wymaga nieba
+przez użytkownika 2026-09-04). Zimny start GPS-a trwa 50–175 s i wymaga nieba
 nad głową, więc **każdy** przejazd zaczynał się w trybie sprzed GPS-a, a przy
 biurku urządzenie zostawało w nim na zawsze — każde poruszenie ręką ustanawiało
 rekord przechyłu, mimo że prędkość pokazywała `---`.
