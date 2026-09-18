@@ -1385,7 +1385,23 @@ void pumpGps(uint32_t nowMs) {
     // wymagamy — inaczej niz przechyl, predkosc z GPS nie zalezy od ukladu
     // odniesienia urzadzenia, wiec brak kalibracji nie ma powodu jej blokowac.
     if (g_deviceState.state() == state::DeviceState::Riding) {
-        g_metrics.updateSpeed(sample);
+        // REKORD PREDKOSCI TYLKO PRZY POTWIERDZONYM RUCHU. 2026-09-18,
+        // urzadzenie lezace nieruchomo w otwartych drzwiach balkonowych: fix
+        // 3D, HDOP 2,5, dziewiec satelitow — i pojedyncza probka 22,5 km/h,
+        // ktora ustawila rekord sesji. Bramka jakosci nie miala jej jak
+        // odrzucic, bo dane BYLY dobre: falszywa byla sama predkosc, nie fix.
+        // Sasiednie probki (1,6 / 4,9 / 2,6 km/h) odsial prog minSpeedKmh,
+        // ta jedna przeszla.
+        //
+        // IMU w tej samej chwili wiedzialo, ze nic sie nie rusza — i to jest
+        // jedyne zrodlo, ktore moglo to rozstrzygnac. Weto jest bezpieczne
+        // w druga strone: `stationary` wymaga ciszy na akcelerometrze
+        // (0,05 g) i zyroskopie (1,5 stopnia/s) przez pol sekundy, a tego na
+        // jadacym motocyklu nie ma nawet na gladkim asfalcie.
+        //
+        // Sladu to NIE dotyczy: tam falszywy punkt odsiewa decymator, a przy
+        // postoju zapis pozycji jest pozadany.
+        if (!g_orientation.state().stationary) g_metrics.updateSpeed(sample);
         feedTrack(nowMs);
     }
 }
