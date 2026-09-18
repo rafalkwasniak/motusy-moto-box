@@ -226,6 +226,23 @@ rzeczy wobec modułów z anteną zewnętrzną:
   leżący bokiem albo spodem do nieba traci większość sygnału. Ma to bezpośredni
   wpływ na montaż na motocyklu: pod owiewką albo w kufrze fix może nie przyjść
   wcale.
+- **Do nieba ma patrzeć ścianka z ikonką znacznika mapy i napisem „GPS 1.1".**
+  Najszybszy znacznik w praktyce to **łeb śruby: jest po stronie spodu**, bo
+  chowa się tam, gdzie go nie widać. Ta sama strona nosi sitodruk
+  `GND / 5V / SDA / SCL` i oznaczenia modelu — nadruk serwisowy, z założenia
+  czytany przy podłączaniu, więc siedzi po stronie lutowania.
+
+  Trzy niezależne przesłanki wskazują to samo: elektryczna (patch ceramiczny
+  musi promieniować w stronę przeciwną do masy płytki, bo miedź pod nim pracuje
+  jako przeciwwaga — antena nie ma prawa siedzieć pod laminatem, bo laminat by
+  ją zasłonił), sitodrukowa i mechaniczna (śruba).
+
+  ⚠️ **Ustalone z wyglądu modułu, NIE zmierzone.** Producent nie podaje tego
+  w dokumentacji (sprawdzone 2026-09-18). Rozstrzygnięcie pomiarem jest proste
+  i warte zrobienia przy okazji: ten sam widok nieba w dwóch orientacjach po
+  ~75 s, porównanie średniego SNR czterech najlepszych satelitów z `GSV`.
+  Różnica poniżej 2 dB nie rozstrzyga niczego. Objaw złej strony jest zresztą
+  wyraźny sam z siebie — fix przychodzi wolno albo wcale.
 - **Widok nieba decyduje o wszystkim.** Zmierzone tego samego dnia, tym samym
   egzemplarzem:
 
